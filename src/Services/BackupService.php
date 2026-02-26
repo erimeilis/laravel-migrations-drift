@@ -6,9 +6,15 @@ namespace EriMeilis\MigrationDrift\Services;
 
 use Illuminate\Support\Facades\DB;
 use InvalidArgumentException;
+use RuntimeException;
 
 class BackupService
 {
+    private function migrationsTable(): string
+    {
+        return MigrationTableResolver::resolve();
+    }
+
     /**
      * Create a backup of the migrations table as a JSON file.
      *
@@ -16,7 +22,7 @@ class BackupService
      */
     public function backup(): string
     {
-        $records = DB::table('migrations')
+        $records = DB::table($this->migrationsTable())
             ->orderBy('id')
             ->get()
             ->map(fn ($row) => [
@@ -27,14 +33,33 @@ class BackupService
 
         $backupPath = config('migration-drift.backup_path');
 
-        if (!is_dir($backupPath)) {
-            mkdir($backupPath, 0755, true);
+        if (!is_string($backupPath) || $backupPath === '') {
+            throw new RuntimeException(
+                'Backup path is not configured.'
+                . ' Set migration-drift.backup_path'
+                . ' in your config.',
+            );
         }
 
-        $filename = 'backup-' . date('Y-m-d_His') . '.json';
+        if (!is_dir($backupPath)) {
+            if (!@mkdir($backupPath, 0700, true) && !is_dir($backupPath)) {
+                throw new RuntimeException("Failed to create backup directory: {$backupPath}");
+            }
+        }
+
+        $filename = 'backup-' . date('Y-m-d_His') . '-' . bin2hex(random_bytes(4)) . '.json';
         $filepath = $backupPath . '/' . $filename;
 
-        file_put_contents($filepath, json_encode($records, JSON_PRETTY_PRINT));
+        $result = file_put_contents(
+            $filepath,
+            json_encode(
+                $records,
+                JSON_PRETTY_PRINT | JSON_THROW_ON_ERROR,
+            ),
+        );
+        if ($result === false) {
+            throw new RuntimeException("Failed to write backup file: {$filepath}");
+        }
 
         $this->rotate();
 
@@ -45,6 +70,7 @@ class BackupService
      * Restore the migrations table from a backup file.
      *
      * @throws InvalidArgumentException If the file does not exist
+     * @throws RuntimeException If the file cannot be read or contains invalid data
      */
     public function restore(string $filepath): void
     {
@@ -52,16 +78,40 @@ class BackupService
             throw new InvalidArgumentException("Backup file does not exist: {$filepath}");
         }
 
-        $records = json_decode(file_get_contents($filepath), true);
+        $contents = file_get_contents($filepath);
+        if ($contents === false) {
+            throw new RuntimeException("Failed to read backup file: {$filepath}");
+        }
+
+        $records = json_decode($contents, true);
+
+        if (!is_array($records)) {
+            throw new RuntimeException("Invalid backup file: failed to decode JSON from {$filepath}");
+        }
+
+        foreach ($records as $index => $record) {
+            if (!is_array($record)
+                || !array_key_exists('migration', $record)
+                || !array_key_exists('batch', $record)
+                || !is_string($record['migration'])
+                || !is_int($record['batch'])
+            ) {
+                throw new RuntimeException(
+                    "Invalid backup file: malformed record at index {$index} in {$filepath}"
+                );
+            }
+        }
 
         DB::transaction(function () use ($records): void {
-            DB::table('migrations')->truncate();
+            DB::table($this->migrationsTable())->delete();
 
-            foreach ($records as $record) {
-                DB::table('migrations')->insert([
-                    'migration' => $record['migration'],
-                    'batch' => $record['batch'],
-                ]);
+            $insertData = array_map(fn (array $record) => [
+                'migration' => $record['migration'],
+                'batch' => $record['batch'],
+            ], $records);
+
+            foreach (array_chunk($insertData, 500) as $chunk) {
+                DB::table($this->migrationsTable())->insert($chunk);
             }
         });
     }
@@ -83,9 +133,10 @@ class BackupService
             return null;
         }
 
-        sort($files);
+        // Sort by modification time to get the most recent
+        usort($files, fn (string $a, string $b) => filemtime($b) <=> filemtime($a));
 
-        return end($files);
+        return $files[0];
     }
 
     /**
@@ -102,13 +153,16 @@ class BackupService
             return;
         }
 
-        sort($files);
+        // Sort by modification time, oldest first
+        usort($files, fn (string $a, string $b) => filemtime($a) <=> filemtime($b));
 
         $excess = count($files) - $maxBackups;
 
         if ($excess > 0) {
             for ($i = 0; $i < $excess; $i++) {
-                unlink($files[$i]);
+                if (!unlink($files[$i])) {
+                    error_log("migration-drift: Failed to delete old backup: {$files[$i]}");
+                }
             }
         }
     }

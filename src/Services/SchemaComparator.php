@@ -7,58 +7,148 @@ namespace EriMeilis\MigrationDrift\Services;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Config;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Schema;
 
 class SchemaComparator
 {
+    public function __construct(
+        private readonly SchemaIntrospector $introspector,
+    ) {}
+
     /**
      * Perform a full schema comparison by creating a temp DB,
      * running migrations on it, and diffing both schemas.
      *
-     * @return array{missing_tables: string[], extra_tables: string[], column_diffs: array<string, array>}
+     * @return array{missing_tables: string[], extra_tables: string[], column_diffs: array<string, array<string, mixed>>, index_diffs: array<string, array<string, mixed>>, fk_diffs: array<string, array<string, mixed>>, missing_table_details: array<string, array{columns: array<int, array<string, mixed>>, indexes: array<int, array<string, mixed>>, foreign_keys: array<int, array<string, mixed>>}>}
      */
     public function compare(): array
     {
-        $currentDb = Config::get('database.connections.' . Config::get('database.default') . '.database');
-        $tempDb = $currentDb . '_drift_verify';
         $defaultConnection = Config::get('database.default');
+        $currentDb = Config::get(
+            "database.connections.{$defaultConnection}.database"
+        );
+
+        if (!preg_match('/^[a-zA-Z0-9_]+$/', (string) $currentDb)) {
+            throw new \RuntimeException(
+                "Database name contains unsafe characters: "
+                . "\"{$currentDb}\". Cannot create temp database"
+                . ' for schema comparison.'
+            );
+        }
+
+        $tempDb = $currentDb . '_drift_verify_'
+            . bin2hex(random_bytes(4));
+        $grammar = DB::connection()->getQueryGrammar();
+        $quotedDb = $grammar->wrap($tempDb);
 
         try {
-            DB::statement("CREATE DATABASE \"{$tempDb}\"");
+            DB::statement("CREATE DATABASE {$quotedDb}");
 
-            Config::set('database.connections.drift_verify', array_merge(
-                Config::get("database.connections.{$defaultConnection}"),
-                ['database' => $tempDb],
-            ));
+            Config::set(
+                'database.connections.drift_verify',
+                array_merge(
+                    Config::get(
+                        "database.connections.{$defaultConnection}"
+                    ),
+                    ['database' => $tempDb],
+                ),
+            );
 
             Artisan::call('migrate', [
                 '--database' => 'drift_verify',
                 '--force' => true,
             ]);
 
-            $currentSchema = $this->captureSchema($defaultConnection);
-            $verifySchema = $this->captureSchema('drift_verify');
+            $currentSchema = $this->introspector->getFullSchema(
+                $defaultConnection,
+            );
+            $verifySchema = $this->introspector->getFullSchema(
+                'drift_verify',
+            );
 
-            return $this->diffSchemas($currentSchema, $verifySchema);
+            $diff = $this->diffSchemas(
+                $currentSchema,
+                $verifySchema,
+            );
+
+            // Capture full details for missing tables from
+            // the verify DB before it is dropped
+            $missingDetails = [];
+
+            foreach ($diff['missing_tables'] as $table) {
+                $missingDetails[$table] = [
+                    'columns' => $this->introspector
+                        ->getColumns('drift_verify', $table),
+                    'indexes' => $this->introspector
+                        ->getIndexes('drift_verify', $table),
+                    'foreign_keys' => $this->introspector
+                        ->getForeignKeys(
+                            'drift_verify',
+                            $table,
+                        ),
+                ];
+            }
+
+            $diff['missing_table_details'] = $missingDetails;
+
+            return $diff;
         } finally {
-            DB::purge('drift_verify');
-            DB::statement("DROP DATABASE IF EXISTS \"{$tempDb}\"");
+            try {
+                DB::purge('drift_verify');
+            } catch (\Throwable) {
+                // Connection may not have been established
+            }
+
+            DB::statement(
+                "DROP DATABASE IF EXISTS {$quotedDb}"
+            );
+
+            Config::set(
+                'database.connections.drift_verify',
+                null,
+            );
         }
     }
 
     /**
      * Check whether a diff array indicates any schema differences.
      *
-     * @param array{missing_tables: string[], extra_tables: string[], column_diffs: array<string, array>} $diff
+     * @param array{missing_tables: string[], extra_tables: string[], column_diffs: array<string, array<string, mixed>>, index_diffs?: array<string, array<string, mixed>>, fk_diffs?: array<string, array<string, mixed>>} $diff
      */
     public function hasDifferences(array $diff): bool
     {
-        if (!empty($diff['missing_tables']) || !empty($diff['extra_tables'])) {
+        if (
+            !empty($diff['missing_tables'])
+            || !empty($diff['extra_tables'])
+        ) {
             return true;
         }
 
         foreach ($diff['column_diffs'] as $tableDiff) {
-            if (!empty($tableDiff['missing']) || !empty($tableDiff['extra']) || !empty($tableDiff['type_mismatches'])) {
+            if (
+                !empty($tableDiff['missing'])
+                || !empty($tableDiff['extra'])
+                || !empty($tableDiff['type_mismatches'])
+                || !empty($tableDiff['nullable_mismatches'])
+                || !empty($tableDiff['default_mismatches'])
+            ) {
+                return true;
+            }
+        }
+
+        foreach (($diff['index_diffs'] ?? []) as $indexDiff) {
+            if (
+                !empty($indexDiff['missing'])
+                || !empty($indexDiff['extra'])
+            ) {
+                return true;
+            }
+        }
+
+        foreach (($diff['fk_diffs'] ?? []) as $fkDiff) {
+            if (
+                !empty($fkDiff['missing'])
+                || !empty($fkDiff['extra'])
+            ) {
                 return true;
             }
         }
@@ -67,90 +157,59 @@ class SchemaComparator
     }
 
     /**
-     * Capture the full schema (tables, columns, indexes, foreign keys) for a connection.
-     *
-     * @return array{tables: string[], columns: array<string, array>, indexes: array<string, array>, foreignKeys: array<string, array>}
-     */
-    private function captureSchema(string $connection): array
-    {
-        $schema = Schema::connection($connection);
-
-        $allTables = collect($schema->getTables())
-            ->pluck('name')
-            ->reject(fn (string $name): bool => $name === 'migrations')
-            ->values()
-            ->all();
-
-        $columns = [];
-        $indexes = [];
-        $foreignKeys = [];
-
-        foreach ($allTables as $table) {
-            $columns[$table] = $schema->getColumns($table);
-            $indexes[$table] = $schema->getIndexes($table);
-            $foreignKeys[$table] = $schema->getForeignKeys($table);
-        }
-
-        sort($allTables);
-
-        return [
-            'tables' => $allTables,
-            'columns' => $columns,
-            'indexes' => $indexes,
-            'foreignKeys' => $foreignKeys,
-        ];
-    }
-
-    /**
      * Diff two captured schemas and return structured differences.
      *
-     * @return array{missing_tables: string[], extra_tables: string[], column_diffs: array<string, array>}
+     * @param array{tables: string[], columns: array<string, array<int, array<string, mixed>>>, indexes: array<string, array<int, array<string, mixed>>>, foreign_keys: array<string, array<int, array<string, mixed>>>} $current
+     * @param array{tables: string[], columns: array<string, array<int, array<string, mixed>>>, indexes: array<string, array<int, array<string, mixed>>>, foreign_keys: array<string, array<int, array<string, mixed>>>} $verify
+     * @return array{missing_tables: string[], extra_tables: string[], column_diffs: array<string, array<string, mixed>>, index_diffs: array<string, array<string, mixed>>, fk_diffs: array<string, array<string, mixed>>}
      */
-    private function diffSchemas(array $current, array $verify): array
-    {
+    public function diffSchemas(
+        array $current,
+        array $verify,
+    ): array {
         $currentTables = $current['tables'];
         $verifyTables = $verify['tables'];
 
-        $missingInDb = array_values(array_diff($verifyTables, $currentTables));
-        $extraInDb = array_values(array_diff($currentTables, $verifyTables));
-        $commonTables = array_values(array_intersect($currentTables, $verifyTables));
+        $missingInDb = array_values(
+            array_diff($verifyTables, $currentTables)
+        );
+        $extraInDb = array_values(
+            array_diff($currentTables, $verifyTables)
+        );
+        $commonTables = array_values(
+            array_intersect($currentTables, $verifyTables)
+        );
 
         $columnDiffs = [];
+        $indexDiffs = [];
+        $fkDiffs = [];
 
         foreach ($commonTables as $table) {
-            $currentCols = collect($current['columns'][$table] ?? [])
-                ->keyBy('name');
-            $verifyCols = collect($verify['columns'][$table] ?? [])
-                ->keyBy('name');
+            $colDiff = $this->diffColumns(
+                $current['columns'][$table] ?? [],
+                $verify['columns'][$table] ?? [],
+            );
 
-            $currentColNames = $currentCols->keys()->all();
-            $verifyColNames = $verifyCols->keys()->all();
-
-            $missing = array_values(array_diff($verifyColNames, $currentColNames));
-            $extra = array_values(array_diff($currentColNames, $verifyColNames));
-
-            $typeMismatches = [];
-            $commonCols = array_intersect($currentColNames, $verifyColNames);
-
-            foreach ($commonCols as $colName) {
-                $currentType = $currentCols[$colName]['type'] ?? '';
-                $verifyType = $verifyCols[$colName]['type'] ?? '';
-
-                if ($currentType !== $verifyType) {
-                    $typeMismatches[] = [
-                        'column' => $colName,
-                        'current' => $currentType,
-                        'expected' => $verifyType,
-                    ];
-                }
+            if (!empty($colDiff)) {
+                $columnDiffs[$table] = $colDiff;
             }
 
-            if (!empty($missing) || !empty($extra) || !empty($typeMismatches)) {
-                $columnDiffs[$table] = [
-                    'missing' => $missing,
-                    'extra' => $extra,
-                    'type_mismatches' => $typeMismatches,
-                ];
+            $idxDiff = $this->diffIndexes(
+                $current['indexes'][$table] ?? [],
+                $verify['indexes'][$table] ?? [],
+            );
+
+            if (!empty($idxDiff)) {
+                $indexDiffs[$table] = $idxDiff;
+            }
+
+            $fkDiff = $this->diffForeignKeys(
+                $current['foreign_keys'][$table] ?? [],
+                $verify['foreign_keys'][$table] ?? [],
+            );
+
+            if (!empty($fkDiff)) {
+                $fkDiffs[$table] = $fkDiff;
             }
         }
 
@@ -158,6 +217,235 @@ class SchemaComparator
             'missing_tables' => $missingInDb,
             'extra_tables' => $extraInDb,
             'column_diffs' => $columnDiffs,
+            'index_diffs' => $indexDiffs,
+            'fk_diffs' => $fkDiffs,
         ];
+    }
+
+    /**
+     * @param array<int, array<string, mixed>> $currentCols
+     * @param array<int, array<string, mixed>> $verifyCols
+     * @return array<string, mixed>
+     */
+    private function diffColumns(
+        array $currentCols,
+        array $verifyCols,
+    ): array {
+        $current = collect($currentCols)->keyBy('name');
+        $verify = collect($verifyCols)->keyBy('name');
+
+        $currentNames = $current->keys()->all();
+        $verifyNames = $verify->keys()->all();
+
+        $missing = array_values(
+            array_diff($verifyNames, $currentNames)
+        );
+        $extra = array_values(
+            array_diff($currentNames, $verifyNames)
+        );
+
+        $typeMismatches = [];
+        $nullableMismatches = [];
+        $defaultMismatches = [];
+        $commonCols = array_intersect($currentNames, $verifyNames);
+
+        foreach ($commonCols as $colName) {
+            $curCol = $current[$colName];
+            $verCol = $verify[$colName];
+
+            $curType = $this->introspector->normalizeType(
+                $curCol['type'] ?? ''
+            );
+            $verType = $this->introspector->normalizeType(
+                $verCol['type'] ?? ''
+            );
+
+            if ($curType !== $verType) {
+                $typeMismatches[] = [
+                    'column' => $colName,
+                    'current' => $curCol['type'] ?? '',
+                    'expected' => $verCol['type'] ?? '',
+                ];
+            }
+
+            $curNullable = $curCol['nullable'] ?? false;
+            $verNullable = $verCol['nullable'] ?? false;
+
+            if ($curNullable !== $verNullable) {
+                $nullableMismatches[] = [
+                    'column' => $colName,
+                    'current' => $curNullable
+                        ? 'nullable' : 'not null',
+                    'expected' => $verNullable
+                        ? 'nullable' : 'not null',
+                ];
+            }
+
+            $curDefault = $this->normalizeDefault(
+                $curCol['default'] ?? null
+            );
+            $verDefault = $this->normalizeDefault(
+                $verCol['default'] ?? null
+            );
+
+            if ($curDefault !== $verDefault) {
+                $defaultMismatches[] = [
+                    'column' => $colName,
+                    'current' => $curCol['default'],
+                    'expected' => $verCol['default'],
+                ];
+            }
+        }
+
+        if (
+            empty($missing) && empty($extra)
+            && empty($typeMismatches)
+            && empty($nullableMismatches)
+            && empty($defaultMismatches)
+        ) {
+            return [];
+        }
+
+        return [
+            'missing' => $missing,
+            'extra' => $extra,
+            'type_mismatches' => $typeMismatches,
+            'nullable_mismatches' => $nullableMismatches,
+            'default_mismatches' => $defaultMismatches,
+        ];
+    }
+
+    /**
+     * @param array<int, array<string, mixed>> $currentIndexes
+     * @param array<int, array<string, mixed>> $verifyIndexes
+     * @return array<string, mixed>
+     */
+    private function diffIndexes(
+        array $currentIndexes,
+        array $verifyIndexes,
+    ): array {
+        $currentByKey = $this->indexSignatures($currentIndexes);
+        $verifyByKey = $this->indexSignatures($verifyIndexes);
+
+        $missing = array_values(
+            array_diff_key($verifyByKey, $currentByKey)
+        );
+        $extra = array_values(
+            array_diff_key($currentByKey, $verifyByKey)
+        );
+
+        if (empty($missing) && empty($extra)) {
+            return [];
+        }
+
+        return [
+            'missing' => $missing,
+            'extra' => $extra,
+        ];
+    }
+
+    /**
+     * @param array<int, array<string, mixed>> $currentFks
+     * @param array<int, array<string, mixed>> $verifyFks
+     * @return array<string, mixed>
+     */
+    private function diffForeignKeys(
+        array $currentFks,
+        array $verifyFks,
+    ): array {
+        $currentSigs = $this->fkSignatures($currentFks);
+        $verifySigs = $this->fkSignatures($verifyFks);
+
+        $missing = array_values(
+            array_diff_key($verifySigs, $currentSigs)
+        );
+        $extra = array_values(
+            array_diff_key($currentSigs, $verifySigs)
+        );
+
+        if (empty($missing) && empty($extra)) {
+            return [];
+        }
+
+        return [
+            'missing' => $missing,
+            'extra' => $extra,
+        ];
+    }
+
+    /**
+     * Build a signature map for indexes using columns + unique + primary.
+     *
+     * @param array<int, array<string, mixed>> $indexes
+     * @return array<string, array<string, mixed>>
+     */
+    private function indexSignatures(array $indexes): array
+    {
+        $map = [];
+
+        foreach ($indexes as $index) {
+            $cols = $index['columns'] ?? [];
+            sort($cols);
+            $key = implode(',', $cols)
+                . ':' . (($index['unique'] ?? false)
+                    ? 'unique' : 'index')
+                . ':' . (($index['primary'] ?? false)
+                    ? 'primary' : '');
+
+            $map[$key] = $index;
+        }
+
+        return $map;
+    }
+
+    /**
+     * Build a signature map for foreign keys using columns + ref.
+     *
+     * @param array<int, array<string, mixed>> $fks
+     * @return array<string, array<string, mixed>>
+     */
+    private function fkSignatures(array $fks): array
+    {
+        $map = [];
+
+        foreach ($fks as $fk) {
+            $cols = $fk['columns'] ?? [];
+            sort($cols);
+            $refCols = $fk['foreign_columns'] ?? [];
+            sort($refCols);
+
+            $key = implode(',', $cols)
+                . '->' . ($fk['foreign_table'] ?? '')
+                . '(' . implode(',', $refCols) . ')';
+
+            $map[$key] = $fk;
+        }
+
+        return $map;
+    }
+
+    /**
+     * Normalize a default value for comparison.
+     */
+    private function normalizeDefault(mixed $value): ?string
+    {
+        if ($value === null) {
+            return null;
+        }
+
+        $str = (string) $value;
+
+        // Strip surrounding quotes
+        $str = trim($str, "'\"");
+
+        // Normalize boolean representations
+        if (in_array(strtolower($str), ['true', '1'], true)) {
+            return '1';
+        }
+        if (in_array(strtolower($str), ['false', '0'], true)) {
+            return '0';
+        }
+
+        return $str;
     }
 }

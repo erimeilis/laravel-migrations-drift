@@ -14,10 +14,10 @@ class RenameCommandTest extends TestCase
     {
         parent::setUp();
 
-        $this->tempDir = sys_get_temp_dir() . '/migration-drift-rename-test-' . uniqid();
+        $this->tempDir = \dirname(__DIR__, 2)
+            . '/tmp/migration-drift-rename-test-' . uniqid();
         mkdir($this->tempDir, 0755, true);
 
-        // Copy fixture migrations to temp dir
         $fixtures = glob(__DIR__ . '/../fixtures/migrations/*.php');
         foreach ($fixtures as $file) {
             copy($file, $this->tempDir . '/' . basename($file));
@@ -36,6 +36,11 @@ class RenameCommandTest extends TestCase
             rmdir($this->tempDir);
         }
 
+        $tmpParent = \dirname(__DIR__, 2) . '/tmp';
+        if (is_dir($tmpParent) && \count(scandir($tmpParent)) === 2) {
+            rmdir($tmpParent);
+        }
+
         parent::tearDown();
     }
 
@@ -49,13 +54,21 @@ class RenameCommandTest extends TestCase
             ->expectsOutputToContain('DRY RUN')
             ->assertSuccessful();
 
-        // Files should NOT be renamed in dry run
         $files = glob($this->tempDir . '/*.php');
         $filenames = array_map('basename', $files);
 
-        $this->assertContains('2026_01_01_000001_create_test_users_table.php', $filenames);
-        $this->assertContains('2026_01_01_000002_create_test_posts_table.php', $filenames);
-        $this->assertContains('2026_01_01_000003_add_bio_to_test_users_table.php', $filenames);
+        $this->assertContains(
+            '2026_01_01_000001_create_test_users_table.php',
+            $filenames,
+        );
+        $this->assertContains(
+            '2026_01_01_000002_create_test_posts_table.php',
+            $filenames,
+        );
+        $this->assertContains(
+            '2026_01_01_000003_add_bio_to_test_users_table.php',
+            $filenames,
+        );
     }
 
     public function test_force_renames_files(): void
@@ -68,7 +81,6 @@ class RenameCommandTest extends TestCase
             ->expectsOutputToContain('Renamed 3 files')
             ->assertSuccessful();
 
-        // Verify actual files have 2099_12_31 prefix
         $files = glob($this->tempDir . '/*.php');
         $filenames = array_map('basename', $files);
 
@@ -76,9 +88,18 @@ class RenameCommandTest extends TestCase
             $this->assertStringStartsWith('2099_12_31_', $filename);
         }
 
-        $this->assertContains('2099_12_31_000001_create_test_users_table.php', $filenames);
-        $this->assertContains('2099_12_31_000002_create_test_posts_table.php', $filenames);
-        $this->assertContains('2099_12_31_000003_add_bio_to_test_users_table.php', $filenames);
+        $this->assertContains(
+            '2099_12_31_000001_create_test_users_table.php',
+            $filenames,
+        );
+        $this->assertContains(
+            '2099_12_31_000002_create_test_posts_table.php',
+            $filenames,
+        );
+        $this->assertContains(
+            '2099_12_31_000003_add_bio_to_test_users_table.php',
+            $filenames,
+        );
     }
 
     public function test_skips_already_matching_files(): void
@@ -90,6 +111,41 @@ class RenameCommandTest extends TestCase
         ])
             ->expectsOutputToContain('already correct')
             ->assertSuccessful();
+    }
+
+    public function test_skips_non_migration_php_files(): void
+    {
+        file_put_contents(
+            $this->tempDir . '/helpers.php',
+            '<?php // helper functions',
+        );
+
+        $this->artisan('migrations:rename', [
+            '--force' => true,
+            '--path' => $this->tempDir,
+            '--date' => '2099-12-31',
+        ])
+            ->assertSuccessful();
+
+        $this->assertFileExists($this->tempDir . '/helpers.php');
+
+        $files = glob($this->tempDir . '/*.php');
+        $filenames = array_map('basename', $files);
+        $this->assertContains('helpers.php', $filenames);
+        $this->assertContains(
+            '2099_12_31_000001_create_test_users_table.php',
+            $filenames,
+        );
+    }
+
+    public function test_rejects_invalid_date_format(): void
+    {
+        $this->artisan('migrations:rename', [
+            '--path' => $this->tempDir,
+            '--date' => 'not-a-date',
+        ])
+            ->expectsOutputToContain('Invalid date format')
+            ->assertFailed();
     }
 
     public function test_defaults_to_today(): void
@@ -105,7 +161,10 @@ class RenameCommandTest extends TestCase
         $filenames = array_map('basename', $files);
 
         foreach ($filenames as $filename) {
-            $this->assertStringStartsWith($todayPrefix . '_', $filename);
+            $this->assertStringStartsWith(
+                $todayPrefix . '_',
+                $filename,
+            );
         }
     }
 }

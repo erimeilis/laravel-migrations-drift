@@ -8,6 +8,11 @@ use Illuminate\Support\Facades\DB;
 
 class MigrationDiffService
 {
+    private function migrationsTable(): string
+    {
+        return MigrationTableResolver::resolve();
+    }
+
     /**
      * Compute the diff between migration files on disk and DB records.
      *
@@ -82,7 +87,7 @@ class MigrationDiffService
      */
     public function getMigrationRecords(): array
     {
-        $records = DB::table('migrations')
+        $records = DB::table($this->migrationsTable())
             ->pluck('migration')
             ->toArray();
 

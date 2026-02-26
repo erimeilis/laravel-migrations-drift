@@ -80,7 +80,6 @@ class BackupServiceTest extends TestCase
 
         for ($i = 0; $i < 5; $i++) {
             $this->service->backup();
-            usleep(1100000); // 1.1s to ensure different timestamps
         }
 
         $files = glob($this->backupPath . '/backup-*.json');
@@ -91,11 +90,14 @@ class BackupServiceTest extends TestCase
     public function test_get_latest_backup_path(): void
     {
         $first = $this->service->backup();
-        usleep(1100000);
         $second = $this->service->backup();
+
+        // Ensure second file has a definitively later mtime
+        touch($second, time() + 10);
 
         $latest = $this->service->getLatestBackupPath();
 
+        $this->assertNotNull($latest);
         $this->assertSame($second, $latest);
     }
 
@@ -111,5 +113,110 @@ class BackupServiceTest extends TestCase
         $result = $this->service->getLatestBackupPath();
 
         $this->assertNull($result);
+    }
+
+    public function test_backup_throws_on_write_failure(): void
+    {
+        config()->set('migration-drift.backup_path', '/nonexistent/deeply/nested/path');
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('Failed to');
+
+        $this->service->backup();
+    }
+
+    public function test_restore_throws_on_corrupted_json(): void
+    {
+        $filepath = $this->service->backup();
+        file_put_contents($filepath, '{{{invalid json}}}');
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('Invalid backup file');
+
+        $this->service->restore($filepath);
+    }
+
+    public function test_restore_throws_on_invalid_structure(): void
+    {
+        $filepath = $this->service->backup();
+        file_put_contents($filepath, json_encode([
+            ['wrong_key' => 'value', 'batch' => 1],
+        ]));
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('Invalid backup file');
+
+        $this->service->restore($filepath);
+    }
+
+    public function test_restore_handles_large_record_sets(): void
+    {
+        $records = [];
+        for ($i = 1; $i <= 100; $i++) {
+            $records[] = ['migration' => "2026_01_01_{$i}_test_migration", 'batch' => 1];
+        }
+
+        $filepath = $this->backupPath . '/large-backup.json';
+        if (!is_dir($this->backupPath)) {
+            mkdir($this->backupPath, 0755, true);
+        }
+        file_put_contents($filepath, json_encode($records));
+
+        $this->service->restore($filepath);
+
+        $this->assertCount(100, DB::table('migrations')->get());
+    }
+
+    public function test_restore_rejects_non_string_migration(): void
+    {
+        $filepath = $this->backupPath . '/bad-types.json';
+        mkdir($this->backupPath, 0755, true);
+        file_put_contents($filepath, json_encode([
+            ['migration' => 123, 'batch' => 1],
+        ]));
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('malformed record');
+
+        $this->service->restore($filepath);
+    }
+
+    public function test_restore_rejects_non_int_batch(): void
+    {
+        $filepath = $this->backupPath . '/bad-batch.json';
+        mkdir($this->backupPath, 0755, true);
+        file_put_contents($filepath, json_encode([
+            ['migration' => '2026_01_01_000001_test', 'batch' => 'one'],
+        ]));
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('malformed record');
+
+        $this->service->restore($filepath);
+    }
+
+    public function test_restore_is_transactional_on_failure(): void
+    {
+        $filepath = $this->service->backup();
+
+        // Write a corrupted backup that will cause insert to fail
+        $corruptData = [
+            ['migration' => 'valid_migration', 'batch' => 1],
+            ['migration' => null, 'batch' => null], // null migration will violate NOT NULL
+        ];
+        file_put_contents($filepath, json_encode($corruptData));
+
+        $originalRecords = DB::table('migrations')->pluck('migration')->toArray();
+
+        try {
+            $this->service->restore($filepath);
+        } catch (\Throwable) {
+            // Expected to fail
+        }
+
+        // Table should still have original data, not be empty
+        $afterRecords = DB::table('migrations')->pluck('migration')->toArray();
+        $this->assertNotEmpty($afterRecords, 'Table should not be empty after failed restore');
+        $this->assertEqualsCanonicalizing($originalRecords, $afterRecords);
     }
 }
