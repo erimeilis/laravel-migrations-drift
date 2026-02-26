@@ -28,23 +28,37 @@ trait ResolvesPath
     }
 
     /**
-     * Resolve the project root by following the vendor symlink from base_path().
+     * Resolve the project root directory.
      *
-     * In a standard Laravel app, base_path('vendor') is the real vendor dir,
-     * so dirname() returns base_path() itself.
-     * In Orchestra Testbench, base_path('vendor') is a symlink to the real
-     * vendor dir, so realpath() + dirname() gives us the actual package root.
+     * Strategy:
+     * 1. Follow base_path('vendor') symlink (works in real
+     *    Laravel apps and Testbench when symlink exists)
+     * 2. Walk up from this package's source to find the
+     *    project root via vendor/autoload.php (works on CI
+     *    and when the vendor symlink is absent)
+     * 3. Fall back to base_path() itself
      */
     private function resolveProjectRoot(): ?string
     {
         $vendorPath = realpath(base_path('vendor'));
 
-        if ($vendorPath === false) {
-            $basePath = realpath(base_path());
-
-            return $basePath !== false ? $basePath : null;
+        if ($vendorPath !== false) {
+            return \dirname($vendorPath);
         }
 
-        return \dirname($vendorPath);
+        // Package source lives at vendor/<pkg>/src/Concerns/
+        // so dirname(__DIR__, 2) is the package root; walk up
+        // to find the project root containing vendor/.
+        $autoloadPath = realpath(
+            \dirname(__DIR__, 2) . '/vendor/autoload.php',
+        );
+
+        if ($autoloadPath !== false) {
+            return \dirname($autoloadPath, 2);
+        }
+
+        $basePath = realpath(base_path());
+
+        return $basePath !== false ? $basePath : null;
     }
 }
