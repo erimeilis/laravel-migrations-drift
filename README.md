@@ -413,7 +413,7 @@ Tested across:
 
 ## 🙏 Acknowledgements
 
-- [roslov/laravel-migration-checker](https://github.com/roslov/laravel-migration-checker) — inspiration for rollback verification approach
+- [roslov/laravel-migration-checker](https://github.com/roslov/laravel-migration-checker) — inspiration for this package
 
 ---
 
