@@ -18,7 +18,6 @@
         "nikic/php-parser": "^5.0"
     },
     "require-dev": {
-        "dykyi-roman/awesome-claude-code": "*",
         "larastan/larastan": "^2.0|^3.0",
         "orchestra/testbench": "^9.0|^10.0",
         "phpunit/phpunit": "^11.0"
@@ -41,10 +40,7 @@
         }
     },
     "config": {
-        "sort-packages": true,
-        "allow-plugins": {
-            "dykyi-roman/awesome-claude-code": true
-        }
+        "sort-packages": true
     },
     "minimum-stability": "stable",
     "prefer-stable": true
