@@ -2,12 +2,12 @@
 
 **Keep your Laravel database in perfect sync with your migrations**
 
-[![Latest Version on Packagist](https://img.shields.io/packagist/v/erimeilis/laravel-migrations-drift.svg)](https://packagist.org/packages/erimeilis/laravel-migrations-drift)
-[![Total Downloads](https://img.shields.io/packagist/dt/erimeilis/laravel-migrations-drift.svg)](https://packagist.org/packages/erimeilis/laravel-migrations-drift)
+[![Latest Version on Packagist](https://img.shields.io/packagist/v/erimeilis/laravel-migrations-drift.svg?style=flat-square)](https://packagist.org/packages/erimeilis/laravel-migrations-drift)
+[![Total Downloads](https://img.shields.io/packagist/dt/erimeilis/laravel-migrations-drift.svg?style=flat-square)](https://packagist.org/packages/erimeilis/laravel-migrations-drift)
 [![Tests](https://github.com/erimeilis/laravel-migrations-drift/actions/workflows/tests.yml/badge.svg)](https://github.com/erimeilis/laravel-migrations-drift/actions/workflows/tests.yml)
-[![PHP Version](https://img.shields.io/packagist/php-v/erimeilis/laravel-migrations-drift.svg)](https://packagist.org/packages/erimeilis/laravel-migrations-drift)
-[![Laravel 11+](https://img.shields.io/badge/Laravel-11%20%7C%2012-FF2D20.svg)](https://laravel.com)
-[![License: MIT](https://img.shields.io/packagist/l/erimeilis/laravel-migrations-drift.svg)](https://opensource.org/licenses/MIT)
+[![PHP Version](https://img.shields.io/packagist/php-v/erimeilis/laravel-migrations-drift.svg?style=flat-square)](https://packagist.org/packages/erimeilis/laravel-migrations-drift)
+[![Laravel 11+](https://img.shields.io/badge/Laravel-11%20%7C%2012-FF2D20.svg?style=flat-square)](https://laravel.com)
+[![License: MIT](https://img.shields.io/packagist/l/erimeilis/laravel-migrations-drift.svg?style=flat-square)](https://opensource.org/licenses/MIT)
 
 > 🔍 Detect every kind of schema drift — filenames, columns, indexes, foreign keys
 > 🔧 Fix it all — sync records, generate corrective migrations, consolidate chains
@@ -406,7 +406,7 @@ vendor/bin/phpstan analyse
 ```
 
 Tested across:
-- PHP 8.2, 8.3, 8.4
+- PHP 8.2, 8.3, 8.4, 8.5
 - Laravel 11.x, 12.x
 
 ---
