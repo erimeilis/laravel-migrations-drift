@@ -411,6 +411,12 @@ Tested across:
 
 ---
 
+## 🙏 Acknowledgements
+
+- [roslov/laravel-migration-checker](https://github.com/roslov/laravel-migration-checker) — inspiration for rollback verification approach
+
+---
+
 ## 📄 License
 
 MIT License — see [LICENSE](LICENSE) file
