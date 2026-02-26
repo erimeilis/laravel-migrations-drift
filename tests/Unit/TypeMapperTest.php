@@ -392,6 +392,46 @@ class TypeMapperTest extends TestCase
         );
     }
 
+    public function test_from_blueprint_method_maps_known_types(): void
+    {
+        $result = $this->mapper->fromBlueprintMethod(
+            'string',
+        );
+
+        $this->assertSame(
+            'varchar(255)',
+            $result['type'],
+        );
+        $this->assertSame(
+            'varchar',
+            $result['type_name'],
+        );
+    }
+
+    public function test_from_blueprint_method_returns_varchar_for_null(): void
+    {
+        $result = $this->mapper->fromBlueprintMethod(
+            null,
+        );
+
+        $this->assertSame(
+            'varchar(255)',
+            $result['type'],
+        );
+    }
+
+    public function test_from_blueprint_method_returns_varchar_for_unknown(): void
+    {
+        $result = $this->mapper->fromBlueprintMethod(
+            'nonExistentMethod',
+        );
+
+        $this->assertSame(
+            'varchar(255)',
+            $result['type'],
+        );
+    }
+
     public function test_foreign_key_composite(): void
     {
         $fk = [

@@ -7,6 +7,107 @@ namespace EriMeilis\MigrationDrift\Services;
 class TypeMapper
 {
     /**
+     * Blueprint method -> [SQL type, type_name].
+     *
+     * @var array<string, array{0: string, 1: string}>
+     */
+    private const BLUEPRINT_TO_SQL = [
+        'id' => ['bigint', 'bigint'],
+        'uuid' => ['char(36)', 'uuid'],
+        'ulid' => ['char(26)', 'ulid'],
+        'string' => ['varchar(255)', 'varchar'],
+        'text' => ['text', 'text'],
+        'mediumText' => ['mediumtext', 'mediumtext'],
+        'longText' => ['longtext', 'longtext'],
+        'tinyText' => ['tinytext', 'tinytext'],
+        'integer' => ['integer', 'integer'],
+        'bigInteger' => ['bigint', 'bigint'],
+        'smallInteger' => ['smallint', 'smallint'],
+        'tinyInteger' => ['tinyint', 'tinyint'],
+        'mediumInteger' => [
+            'mediumint', 'mediumint',
+        ],
+        'unsignedBigInteger' => ['bigint', 'bigint'],
+        'unsignedInteger' => ['integer', 'integer'],
+        'unsignedSmallInteger' => [
+            'smallint', 'smallint',
+        ],
+        'unsignedTinyInteger' => [
+            'tinyint', 'tinyint',
+        ],
+        'unsignedMediumInteger' => [
+            'mediumint', 'mediumint',
+        ],
+        'float' => ['float', 'float'],
+        'double' => ['double', 'double'],
+        'decimal' => ['decimal(8,2)', 'decimal'],
+        'boolean' => ['boolean', 'boolean'],
+        'date' => ['date', 'date'],
+        'dateTime' => ['datetime', 'datetime'],
+        'dateTimeTz' => ['datetime', 'datetimetz'],
+        'time' => ['time', 'time'],
+        'timeTz' => ['time', 'timetz'],
+        'timestamp' => ['timestamp', 'timestamp'],
+        'timestampTz' => [
+            'timestamp', 'timestamptz',
+        ],
+        'timestamps' => [
+            'timestamp', 'timestamp',
+        ],
+        'timestampsTz' => [
+            'timestamp', 'timestamptz',
+        ],
+        'softDeletes' => [
+            'timestamp', 'timestamp',
+        ],
+        'softDeletesTz' => [
+            'timestamp', 'timestamptz',
+        ],
+        'json' => ['json', 'json'],
+        'jsonb' => ['jsonb', 'jsonb'],
+        'binary' => ['blob', 'binary'],
+        'enum' => ['enum', 'enum'],
+        'set' => ['set', 'set'],
+        'char' => ['char(255)', 'char'],
+        'year' => ['year', 'year'],
+        'foreignId' => ['bigint', 'bigint'],
+        'foreignUuid' => ['char(36)', 'uuid'],
+        'foreignUlid' => ['char(26)', 'ulid'],
+        'rememberToken' => [
+            'varchar(100)', 'varchar',
+        ],
+        'ipAddress' => ['varchar(45)', 'varchar'],
+        'macAddress' => ['varchar(17)', 'varchar'],
+        'morphs' => ['varchar(255)', 'varchar'],
+        'nullableMorphs' => [
+            'varchar(255)', 'varchar',
+        ],
+        'uuidMorphs' => ['char(36)', 'uuid'],
+        'nullableUuidMorphs' => [
+            'char(36)', 'uuid',
+        ],
+        'geometry' => ['geometry', 'geometry'],
+        'point' => ['point', 'point'],
+        'lineString' => [
+            'linestring', 'linestring',
+        ],
+        'polygon' => ['polygon', 'polygon'],
+        'multiPoint' => [
+            'multipoint', 'multipoint',
+        ],
+        'multiLineString' => [
+            'multilinestring', 'multilinestring',
+        ],
+        'multiPolygon' => [
+            'multipolygon', 'multipolygon',
+        ],
+        'geometryCollection' => [
+            'geometrycollection',
+            'geometrycollection',
+        ],
+    ];
+
+    /**
      * Map a DB column type to a Laravel Blueprint method call.
      *
      * @param array<string, mixed> $columnInfo Column info from SchemaIntrospector
@@ -130,6 +231,34 @@ class TypeMapper
         }
 
         return $line;
+    }
+
+    /**
+     * Map a Blueprint method name to SQL type info.
+     *
+     * @return array{type: string, type_name: string}
+     */
+    public function fromBlueprintMethod(
+        ?string $blueprintMethod,
+    ): array {
+        if (
+            $blueprintMethod === null
+            || !isset(
+                self::BLUEPRINT_TO_SQL[$blueprintMethod],
+            )
+        ) {
+            return [
+                'type' => 'varchar(255)',
+                'type_name' => 'varchar',
+            ];
+        }
+
+        $entry = self::BLUEPRINT_TO_SQL[$blueprintMethod];
+
+        return [
+            'type' => $entry[0],
+            'type_name' => $entry[1],
+        ];
     }
 
     private function mapType(
@@ -263,7 +392,8 @@ class TypeMapper
         // Try type_name first, then type
         return $map[$typeName]
             ?? $map[$type]
-            ?? "addColumn('{$type}', '{$name}')";
+            ?? "addColumn('"
+            . addcslashes($type, "'\\") . "', '{$name}')";
     }
 
     /**
@@ -316,11 +446,12 @@ class TypeMapper
             || str_contains($upperStr, 'NOW()')
             || str_starts_with($upperStr, 'NEXTVAL')
         ) {
-            return "DB::raw('{$str}')";
+            $escaped = addcslashes($str, "'\\");
+            return "DB::raw('{$escaped}')";
         }
 
-        // Escape single quotes in string values
-        $escaped = str_replace("'", "\\'", $str);
+        // Escape single quotes and backslashes in string values
+        $escaped = addcslashes($str, "'\\");
 
         return "'{$escaped}'";
     }

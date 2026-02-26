@@ -49,27 +49,8 @@ class MigrationParser
         $traverser->traverse($stmts);
 
         $filename = basename($filePath, '.php');
-        $touchedTables = array_values(
-            array_unique($visitor->touchedTables),
-        );
 
-        return new MigrationDefinition(
-            filename: $filename,
-            tableName: $visitor->touchedTables[0] ?? null,
-            touchedTables: $touchedTables,
-            operationType: $visitor->operationType ?? 'unknown',
-            upColumns: $visitor->upColumns,
-            upColumnTypes: $visitor->upColumnTypes,
-            upIndexes: $visitor->upIndexes,
-            upForeignKeys: $visitor->upForeignKeys,
-            hasDown: $visitor->hasDown,
-            downIsEmpty: $visitor->hasDown
-                && $visitor->downIsEmpty,
-            downOperations: $visitor->downOperations,
-            hasConditionalLogic: $visitor->hasConditionalLogic,
-            isMultiTable: count($touchedTables) > 1,
-            hasDataManipulation: $visitor->hasDataManipulation,
-        );
+        return $visitor->toDefinition($filename);
     }
 
     /**

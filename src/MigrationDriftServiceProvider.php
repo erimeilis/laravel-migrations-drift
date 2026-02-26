@@ -55,6 +55,7 @@ class MigrationDriftServiceProvider extends ServiceProvider
             ConsolidationService::class,
             fn ($app) => new ConsolidationService(
                 $app->make(MigrationGenerator::class),
+                $app->make(TypeMapper::class),
             ),
         );
 

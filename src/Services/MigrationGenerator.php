@@ -23,6 +23,24 @@ class MigrationGenerator
     ) {}
 
     /**
+     * Validate that a value is safe for interpolation into
+     * generated PHP code.
+     *
+     * @throws RuntimeException If the value contains unsafe characters
+     */
+    private static function assertSafeIdentifier(
+        string $value,
+        string $context,
+    ): void {
+        if (!preg_match('/^[a-zA-Z_][a-zA-Z0-9_]*$/', $value)) {
+            throw new RuntimeException(
+                "Unsafe {$context} for code generation:"
+                . " '{$value}'",
+            );
+        }
+    }
+
+    /**
      * Generate a migration to add a missing column.
      *
      * @param array<string, mixed> $columnInfo
@@ -34,7 +52,11 @@ class MigrationGenerator
         string $migrationsPath,
         string $date,
     ): string {
+        self::assertSafeIdentifier($table, 'table name');
+
         $colName = $columnInfo['name'] ?? 'unknown';
+        self::assertSafeIdentifier($colName, 'column name');
+
         $colDef = $this->typeMapper->toColumnDefinition(
             $columnInfo,
         );
@@ -75,6 +97,9 @@ class MigrationGenerator
         string $migrationsPath,
         string $date,
     ): string {
+        self::assertSafeIdentifier($table, 'table name');
+        self::assertSafeIdentifier($column, 'column name');
+
         $up = "        Schema::table('{$table}', "
             . "function (Blueprint \$table) {\n"
             . "            \$table->dropColumn('{$column}');\n"
@@ -125,6 +150,8 @@ class MigrationGenerator
         string $migrationsPath,
         string $date,
     ): string {
+        self::assertSafeIdentifier($table, 'table name');
+
         $colLines = [];
 
         foreach ($columns as $col) {
@@ -219,6 +246,8 @@ class MigrationGenerator
         string $migrationsPath,
         string $date,
     ): string {
+        self::assertSafeIdentifier($table, 'table name');
+
         // up() drops FKs first, then the table
         $upLines = [];
 
@@ -309,6 +338,8 @@ class MigrationGenerator
         string $migrationsPath,
         string $date,
     ): string {
+        self::assertSafeIdentifier($table, 'table name');
+
         $idxDef = $this->typeMapper->toIndexDefinition(
             $indexInfo,
         );
@@ -357,6 +388,8 @@ class MigrationGenerator
         string $migrationsPath,
         string $date,
     ): string {
+        self::assertSafeIdentifier($table, 'table name');
+
         $fkDef = $this->typeMapper->toForeignKeyDefinition(
             $fkInfo,
         );
@@ -456,19 +489,38 @@ class MigrationGenerator
     private function dedent(string $content): string
     {
         $lines = explode("\n", $content);
-        $dedented = [];
 
+        // Find minimum indentation across
+        // non-empty lines
+        $minIndent = PHP_INT_MAX;
         foreach ($lines as $line) {
-            // Remove exactly 12 leading spaces (3 levels
-            // of heredoc indentation)
-            if (str_starts_with($line, '            ')) {
-                $dedented[] = substr($line, 12);
-            } elseif (str_starts_with($line, '        ')) {
-                $dedented[] = substr($line, 8);
-            } elseif (trim($line) === '') {
+            if (trim($line) === '') {
+                continue;
+            }
+            $stripped = ltrim($line, ' ');
+            $indent = strlen($line)
+                - strlen($stripped);
+            if ($indent < $minIndent) {
+                $minIndent = $indent;
+            }
+        }
+
+        if (
+            $minIndent === 0
+            || $minIndent === PHP_INT_MAX
+        ) {
+            return $content;
+        }
+
+        $dedented = [];
+        foreach ($lines as $line) {
+            if (trim($line) === '') {
                 $dedented[] = '';
             } else {
-                $dedented[] = $line;
+                $dedented[] = substr(
+                    $line,
+                    $minIndent,
+                );
             }
         }
 

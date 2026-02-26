@@ -22,24 +22,12 @@ class MigrationGeneratorTest extends TestCase
             new TypeMapper(),
         );
 
-        $this->outputPath = sys_get_temp_dir()
-            . '/migration-drift-gen-' . uniqid();
-        mkdir($this->outputPath, 0755, true);
+        $this->outputPath = $this->createTempDirectory();
     }
 
     protected function tearDown(): void
     {
-        $files = glob($this->outputPath . '/*.php');
-
-        if ($files !== false) {
-            foreach ($files as $file) {
-                unlink($file);
-            }
-        }
-
-        if (is_dir($this->outputPath)) {
-            rmdir($this->outputPath);
-        }
+        $this->cleanTempDirectory($this->outputPath);
 
         parent::tearDown();
     }

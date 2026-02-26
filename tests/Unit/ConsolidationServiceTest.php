@@ -26,32 +26,22 @@ class ConsolidationServiceTest extends TestCase
         parent::setUp();
 
         $this->parser = new MigrationParser();
-        $generator = new MigrationGenerator(new TypeMapper());
+        $typeMapper = new TypeMapper();
+        $generator = new MigrationGenerator($typeMapper);
         $this->service = new ConsolidationService(
             $generator,
+            $typeMapper,
         );
 
         $this->fixturesPath = dirname(__DIR__)
             . '/fixtures';
 
-        $this->outputPath = sys_get_temp_dir()
-            . '/migration-drift-consolidation-' . uniqid();
-        mkdir($this->outputPath, 0755, true);
+        $this->outputPath = $this->createTempDirectory();
     }
 
     protected function tearDown(): void
     {
-        $files = glob($this->outputPath . '/*.php');
-
-        if ($files !== false) {
-            foreach ($files as $file) {
-                unlink($file);
-            }
-        }
-
-        if (is_dir($this->outputPath)) {
-            rmdir($this->outputPath);
-        }
+        $this->cleanTempDirectory($this->outputPath);
 
         parent::tearDown();
     }

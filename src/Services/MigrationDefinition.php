@@ -13,8 +13,8 @@ class MigrationDefinition
      * @param string $operationType 'create', 'alter', 'drop', 'unknown'
      * @param string[] $upColumns Columns added/modified in up()
      * @param array<string, string> $upColumnTypes Column name → Blueprint method name
-     * @param string[] $upIndexes Indexes added in up()
-     * @param string[] $upForeignKeys Foreign keys added in up()
+     * @param array<int, array{type: string, columns: string[]}> $upIndexes Indexes added in up()
+     * @param array<int, array{column: ?string, references: ?string, on: ?string}> $upForeignKeys Foreign keys added in up()
      * @param bool $hasDown down() method exists
      * @param bool $downIsEmpty down() body is empty or only has comments
      * @param string[] $downOperations Operations found in down()

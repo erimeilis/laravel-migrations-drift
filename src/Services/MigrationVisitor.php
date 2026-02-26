@@ -13,32 +13,43 @@ use PhpParser\NodeVisitorAbstract;
 class MigrationVisitor extends NodeVisitorAbstract
 {
     /** @var string[] */
-    public array $touchedTables = [];
+    private array $touchedTables = [];
 
-    public ?string $operationType = null;
-
-    /** @var string[] */
-    public array $upColumns = [];
-
-    /** @var array<string, string> Column name → Blueprint method */
-    public array $upColumnTypes = [];
+    private ?string $operationType = null;
 
     /** @var string[] */
-    public array $upIndexes = [];
+    private array $upColumns = [];
+
+    /** @var array<string, string> Column name -> Blueprint method */
+    private array $upColumnTypes = [];
+
+    /**
+     * @var array<int, array{
+     *     type: string,
+     *     columns: string[],
+     * }>
+     */
+    private array $upIndexes = [];
+
+    /**
+     * @var array<int, array{
+     *     column: ?string,
+     *     references: ?string,
+     *     on: ?string,
+     * }>
+     */
+    private array $upForeignKeys = [];
+
+    private bool $hasDown = false;
+
+    private bool $downIsEmpty = true;
 
     /** @var string[] */
-    public array $upForeignKeys = [];
+    private array $downOperations = [];
 
-    public bool $hasDown = false;
+    private bool $hasConditionalLogic = false;
 
-    public bool $downIsEmpty = true;
-
-    /** @var string[] */
-    public array $downOperations = [];
-
-    public bool $hasConditionalLogic = false;
-
-    public bool $hasDataManipulation = false;
+    private bool $hasDataManipulation = false;
 
     private bool $inUpMethod = false;
 
@@ -97,6 +108,38 @@ class MigrationVisitor extends NodeVisitorAbstract
 
     public function leaveNode(Node $node): ?int
     {
+        // Update FK chain info (leaveNode processes
+        // inner->outer: foreign() then references()
+        // then on())
+        if (
+            $node instanceof Node\Expr\MethodCall
+            && $this->inUpMethod
+            && !empty($this->upForeignKeys)
+        ) {
+            $method = $node->name instanceof Node\Identifier
+                ? $node->name->toString()
+                : null;
+            $lastIdx = count($this->upForeignKeys) - 1;
+
+            if ($method === 'references') {
+                $arg = $this->extractFirstStringArg(
+                    $node,
+                );
+                if ($arg !== null) {
+                    $this->upForeignKeys[$lastIdx]
+                        ['references'] = $arg;
+                }
+            } elseif ($method === 'on') {
+                $arg = $this->extractFirstStringArg(
+                    $node,
+                );
+                if ($arg !== null) {
+                    $this->upForeignKeys[$lastIdx]
+                        ['on'] = $arg;
+                }
+            }
+        }
+
         if ($node instanceof Node\Stmt\ClassMethod) {
             $name = $node->name->toString();
 
@@ -108,6 +151,36 @@ class MigrationVisitor extends NodeVisitorAbstract
         }
 
         return null;
+    }
+
+    /**
+     * Build a MigrationDefinition from collected data.
+     */
+    public function toDefinition(
+        string $filename,
+    ): MigrationDefinition {
+        $touchedTables = array_values(
+            array_unique($this->touchedTables),
+        );
+
+        return new MigrationDefinition(
+            filename: $filename,
+            tableName: $this->touchedTables[0] ?? null,
+            touchedTables: $touchedTables,
+            operationType: $this->operationType
+                ?? 'unknown',
+            upColumns: $this->upColumns,
+            upColumnTypes: $this->upColumnTypes,
+            upIndexes: $this->upIndexes,
+            upForeignKeys: $this->upForeignKeys,
+            hasDown: $this->hasDown,
+            downIsEmpty: $this->hasDown
+                && $this->downIsEmpty,
+            downOperations: $this->downOperations,
+            hasConditionalLogic: $this->hasConditionalLogic,
+            isMultiTable: count($touchedTables) > 1,
+            hasDataManipulation: $this->hasDataManipulation,
+        );
     }
 
     private function visitSchemaCall(
@@ -131,7 +204,10 @@ class MigrationVisitor extends NodeVisitorAbstract
             $this->touchedTables[] = $tableName;
         }
 
-        if ($this->inUpMethod && $this->operationType === null) {
+        if (
+            $this->inUpMethod
+            && $this->operationType === null
+        ) {
             $this->operationType = match ($method) {
                 'create' => 'create',
                 'table' => 'alter',
@@ -216,26 +292,50 @@ class MigrationVisitor extends NodeVisitorAbstract
 
         // Index methods
         $indexMethods = [
-            'index', 'unique', 'primary', 'spatialIndex',
-            'fullText',
+            'index', 'unique', 'primary',
+            'spatialIndex', 'fullText',
         ];
 
         if (in_array($method, $indexMethods, true)) {
-            $colName = $this->extractFirstStringArg($node);
-            $this->upIndexes[] = $method
-                . ($colName !== null
-                    ? "({$colName})" : '');
+            $colName = $this->extractFirstStringArg(
+                $node,
+            );
+            $this->upIndexes[] = [
+                'type' => $method,
+                'columns' => $colName !== null
+                    ? [$colName] : [],
+            ];
         }
 
         // Foreign key methods
-        if (
-            $method === 'foreign'
-            || $method === 'constrained'
-        ) {
-            $colName = $this->extractFirstStringArg($node);
-            $this->upForeignKeys[] = $method
-                . ($colName !== null
-                    ? "({$colName})" : '');
+        if ($method === 'foreign') {
+            $colName = $this->extractFirstStringArg(
+                $node,
+            );
+            $this->upForeignKeys[] = [
+                'column' => $colName,
+                'references' => null,
+                'on' => null,
+            ];
+        }
+
+        // constrained() is a shorthand for
+        // foreign()->references('id')->on(table)
+        if ($method === 'constrained') {
+            // The table arg is optional (first arg)
+            $tableName = $this->extractFirstStringArg(
+                $node,
+            );
+            // Column comes from the preceding
+            // foreignId/foreignUuid call — use the last
+            // upColumns entry as the FK column
+            $fkColumn = !empty($this->upColumns)
+                ? end($this->upColumns) : null;
+            $this->upForeignKeys[] = [
+                'column' => $fkColumn,
+                'references' => 'id',
+                'on' => $tableName,
+            ];
         }
     }
 
@@ -256,6 +356,27 @@ class MigrationVisitor extends NodeVisitorAbstract
             $arg = $this->extractFirstStringArg($node);
             $this->downOperations[] = $method
                 . ($arg !== null ? "('{$arg}')" : '()');
+        }
+
+        // Column-adding methods in down() indicate
+        // that up() dropped these columns
+        $columnMethods = [
+            'string', 'text', 'integer', 'bigInteger',
+            'boolean', 'date', 'dateTime', 'timestamp',
+            'json', 'binary', 'float', 'double', 'decimal',
+            'char', 'enum', 'set', 'uuid', 'ulid',
+            'tinyInteger', 'smallInteger', 'mediumInteger',
+            'mediumText', 'longText', 'tinyText',
+        ];
+
+        if (in_array($method, $columnMethods, true)) {
+            $colName = $this->extractFirstStringArg(
+                $node,
+            );
+            if ($colName !== null) {
+                $this->downOperations[]
+                    = "addColumn('{$colName}')";
+            }
         }
     }
 
@@ -378,11 +499,14 @@ class MigrationVisitor extends NodeVisitorAbstract
     private function isMethodEmpty(
         Node\Stmt\ClassMethod $node,
     ): bool {
-        if ($node->stmts === null || count($node->stmts) === 0) {
+        if (
+            $node->stmts === null
+            || count($node->stmts) === 0
+        ) {
             return true;
         }
 
-        // Check if all statements are just comments (Nop nodes)
+        // Check if all statements are just comments
         foreach ($node->stmts as $stmt) {
             if (!$stmt instanceof Node\Stmt\Nop) {
                 return false;

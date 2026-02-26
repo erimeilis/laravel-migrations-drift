@@ -118,7 +118,7 @@ class DetectCommandTest extends TestCase
             '--verify-roundtrip' => true,
         ])
             ->expectsOutputToContain('not yet implemented')
-            ->assertFailed();
+            ->assertSuccessful();
     }
 
     public function test_no_migration_files_shows_info(): void

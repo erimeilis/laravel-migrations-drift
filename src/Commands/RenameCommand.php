@@ -43,11 +43,30 @@ class RenameCommand extends Command
         $dateOption = $this->resolveDate();
 
         if (
-            !preg_match('/^\d{4}-\d{2}-\d{2}$/', $dateOption)
-            || !strtotime($dateOption)
+            !preg_match(
+                '/^\d{4}-\d{2}-\d{2}$/',
+                $dateOption,
+            )
         ) {
             $this->error(
-                "Invalid date format: {$dateOption}. Expected YYYY-MM-DD.",
+                "Invalid date format: {$dateOption}."
+                . ' Expected YYYY-MM-DD.',
+            );
+
+            return self::FAILURE;
+        }
+
+        $parsed = \DateTimeImmutable::createFromFormat(
+            'Y-m-d',
+            $dateOption,
+        );
+
+        if (
+            $parsed === false
+            || $parsed->format('Y-m-d') !== $dateOption
+        ) {
+            $this->error(
+                "Invalid date: {$dateOption}.",
             );
 
             return self::FAILURE;
@@ -79,18 +98,7 @@ class RenameCommand extends Command
             return self::SUCCESS;
         }
 
-        try {
-            $renameService->applyRenames($path, $plan);
-        } catch (RuntimeException $e) {
-            $this->error($e->getMessage());
-
-            return self::FAILURE;
-        }
-
-        $this->info('Renamed ' . count($plan) . ' files.');
-
-        // Update migrations table records to match new
-        // filenames
+        // Step 1: Update DB records first (transactional)
         $migrationsTable = $this->getMigrationsTable();
 
         try {
@@ -113,17 +121,67 @@ class RenameCommand extends Command
                         ->update(['migration' => $newName]);
                 }
             });
-
-            $this->info('Updated migrations table records.');
         } catch (\Throwable $e) {
-            $this->warn(
-                'Files renamed but migrations table update'
-                . ' failed: ' . $e->getMessage(),
+            $this->error(
+                'Database update failed: '
+                . $e->getMessage(),
             );
-            $this->warn(
-                'Run migrations:fix --table to sync records.',
-            );
+
+            return self::FAILURE;
         }
+
+        // Step 2: Rename files (rollback DB on failure)
+        try {
+            $renameService->applyRenames($path, $plan);
+        } catch (RuntimeException $e) {
+            $this->warn(
+                'File rename failed, rolling back'
+                . ' database changes...',
+            );
+
+            try {
+                DB::transaction(function () use (
+                    $migrationsTable,
+                    $plan,
+                ): void {
+                    foreach ($plan as $item) {
+                        $oldName = pathinfo(
+                            $item['old'],
+                            PATHINFO_FILENAME,
+                        );
+                        $newName = pathinfo(
+                            $item['new'],
+                            PATHINFO_FILENAME,
+                        );
+
+                        DB::table($migrationsTable)
+                            ->where('migration', $newName)
+                            ->update(
+                                ['migration' => $oldName],
+                            );
+                    }
+                });
+                $this->info(
+                    'Database changes rolled back.',
+                );
+            } catch (\Throwable $rollbackError) {
+                $this->error(
+                    'Rollback also failed: '
+                    . $rollbackError->getMessage(),
+                );
+                $this->warn(
+                    'Run migrations:fix --table to sync'
+                    . ' records.',
+                );
+            }
+
+            $this->error($e->getMessage());
+
+            return self::FAILURE;
+        }
+
+        $this->info('Renamed ' . count($plan) . ' files.');
+        $this->info('Updated migrations table records.');
 
         return self::SUCCESS;
     }

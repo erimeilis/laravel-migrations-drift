@@ -47,10 +47,6 @@ class FixCommand extends Command
         MigrationParser $parser,
         ConsolidationService $consolidationService,
     ): int {
-        if ($this->option('restore')) {
-            return $this->handleRestore($backupService);
-        }
-
         $connection = $this->selectConnection();
         $currentConnection = (string) config('database.default');
 
@@ -58,6 +54,10 @@ class FixCommand extends Command
             config()->set('database.default', $connection);
             DB::setDefaultConnection($connection);
             DB::purge($connection);
+        }
+
+        if ($this->option('restore')) {
+            return $this->handleRestore($backupService);
         }
 
         $selectedPath = $this->selectPath();
@@ -430,7 +430,7 @@ class FixCommand extends Command
             return self::FAILURE;
         }
 
-        $date = date('Y-m-d');
+        $date = date('Y_m_d');
         $migrationsTable = $this->getMigrationsTable();
         $results = [];
 
@@ -475,17 +475,61 @@ class FixCommand extends Command
                     },
                 );
 
-                // Delete original migration files only after
-                // DB update succeeded
-                foreach (
-                    $result->originalMigrations as $filename
-                ) {
-                    $filePath = $path . '/' . $filename . '.php';
+                // Archive original files (atomic rename)
+                $archiveDir = sys_get_temp_dir()
+                    . '/migration-drift-archive-'
+                    . bin2hex(random_bytes(4));
 
-                    if (file_exists($filePath)) {
-                        unlink($filePath);
-                    }
+                if (!mkdir($archiveDir, 0700, true)) {
+                    throw new RuntimeException(
+                        "Failed to create archive directory:"
+                        . " {$archiveDir}",
+                    );
                 }
+
+                $archived = [];
+                try {
+                    foreach (
+                        $result->originalMigrations
+                        as $filename
+                    ) {
+                        $filePath = $path
+                            . '/' . $filename . '.php';
+
+                        if (file_exists($filePath)) {
+                            $archivePath = $archiveDir
+                                . '/' . $filename . '.php';
+                            if (
+                                !rename(
+                                    $filePath,
+                                    $archivePath,
+                                )
+                            ) {
+                                throw new RuntimeException(
+                                    "Failed to archive:"
+                                    . " {$filePath}",
+                                );
+                            }
+                            $archived[$filePath]
+                                = $archivePath;
+                        }
+                    }
+                } catch (\Throwable $archiveError) {
+                    // Restore any already-archived files
+                    foreach (
+                        $archived as $original => $archive
+                    ) {
+                        rename($archive, $original);
+                    }
+                    @rmdir($archiveDir);
+                    throw $archiveError;
+                }
+
+                // Clean up archive directory
+                foreach ($archived as $archive) {
+                    @unlink($archive);
+                }
+                @rmdir($archiveDir);
             } catch (\Throwable $e) {
                 $this->error(
                     "Failed to consolidate '{$tbl}': "

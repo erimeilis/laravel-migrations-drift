@@ -98,9 +98,16 @@ class SchemaComparator
                 // Connection may not have been established
             }
 
-            DB::statement(
-                "DROP DATABASE IF EXISTS {$quotedDb}"
-            );
+            try {
+                DB::statement(
+                    "DROP DATABASE IF EXISTS {$quotedDb}"
+                );
+            } catch (\Throwable $e) {
+                error_log(
+                    'migration-drift: Failed to drop temp DB '
+                    . $tempDb . ': ' . $e->getMessage()
+                );
+            }
 
             Config::set(
                 'database.connections.drift_verify',
@@ -385,7 +392,6 @@ class SchemaComparator
 
         foreach ($indexes as $index) {
             $cols = $index['columns'] ?? [];
-            sort($cols);
             $key = implode(',', $cols)
                 . ':' . (($index['unique'] ?? false)
                     ? 'unique' : 'index')

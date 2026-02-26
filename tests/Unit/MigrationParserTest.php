@@ -39,6 +39,14 @@ class MigrationParserTest extends TestCase
         $this->assertSame('create', $def->operationType);
         $this->assertContains('name', $def->upColumns);
         $this->assertContains('email', $def->upColumns);
+        $this->assertSame(
+            'string',
+            $def->upColumnTypes['name'],
+        );
+        $this->assertSame(
+            'string',
+            $def->upColumnTypes['email'],
+        );
         $this->assertTrue($def->hasDown);
         $this->assertFalse($def->downIsEmpty);
         $this->assertFalse($def->hasConditionalLogic);
@@ -59,6 +67,10 @@ class MigrationParserTest extends TestCase
         );
         $this->assertSame('alter', $def->operationType);
         $this->assertContains('bio', $def->upColumns);
+        $this->assertSame(
+            'text',
+            $def->upColumnTypes['bio'],
+        );
         $this->assertTrue($def->hasDown);
         $this->assertFalse($def->downIsEmpty);
     }
@@ -146,6 +158,14 @@ class MigrationParserTest extends TestCase
         );
 
         $this->assertNotEmpty($def->upIndexes);
+        $this->assertSame(
+            'index',
+            $def->upIndexes[0]['type'],
+        );
+        $this->assertSame(
+            ['email'],
+            $def->upIndexes[0]['columns'],
+        );
     }
 
     public function test_parse_fk_in_alter(): void
@@ -158,6 +178,18 @@ class MigrationParserTest extends TestCase
 
         $this->assertNotEmpty($def->upForeignKeys);
         $this->assertSame('alter', $def->operationType);
+        $this->assertSame(
+            'post_id',
+            $def->upForeignKeys[0]['column'],
+        );
+        $this->assertSame(
+            'id',
+            $def->upForeignKeys[0]['references'],
+        );
+        $this->assertSame(
+            'posts',
+            $def->upForeignKeys[0]['on'],
+        );
     }
 
     public function test_parse_down_operations(): void

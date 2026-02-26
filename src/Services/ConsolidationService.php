@@ -8,6 +8,7 @@ class ConsolidationService
 {
     public function __construct(
         private readonly MigrationGenerator $generator,
+        private readonly TypeMapper $typeMapper,
     ) {}
 
     /**
@@ -89,9 +90,9 @@ class ConsolidationService
         );
 
         if ($state['has_approximated_types']) {
-            $warnings[] = "Column types for '{$table}' are"
-                . ' approximated as varchar(255). Run'
-                . ' migrations:detect --schema after'
+            $warnings[] = "Column types for '{$table}'"
+                . ' are approximated as varchar(255).'
+                . ' Run migrations:detect --schema after'
                 . ' consolidation to verify.';
         }
 
@@ -194,16 +195,17 @@ class ConsolidationService
 
             // Process columns from up()
             foreach ($def->upColumns as $col) {
-                $blueprintMethod = $def->upColumnTypes[$col]
-                    ?? null;
+                $blueprintMethod
+                    = $def->upColumnTypes[$col] ?? null;
 
                 if ($blueprintMethod === null) {
                     $hasApproximatedTypes = true;
                 }
 
-                $typeInfo = $this->blueprintToType(
-                    $blueprintMethod,
-                );
+                $typeInfo = $this->typeMapper
+                    ->fromBlueprintMethod(
+                        $blueprintMethod,
+                    );
                 $columns[$col] = [
                     'name' => $col,
                     'type' => $typeInfo['type'],
@@ -214,26 +216,37 @@ class ConsolidationService
 
             // Process indexes from up()
             foreach ($def->upIndexes as $idx) {
-                $indexes[$idx] = [
-                    'columns' => [$idx],
-                    'unique' => false,
-                    'primary' => false,
+                if (empty($idx['columns'])) {
+                    continue;
+                }
+                $key = implode(',', $idx['columns'])
+                    . ':' . $idx['type'];
+                $indexes[$key] = [
+                    'columns' => $idx['columns'],
+                    'unique' => $idx['type'] === 'unique',
+                    'primary' => $idx['type'] === 'primary',
                 ];
             }
 
             // Process foreign keys from up()
             foreach ($def->upForeignKeys as $fk) {
-                $foreignKeys[$fk] = [
-                    'columns' => [$fk],
-                    'foreign_table' => '',
-                    'foreign_columns' => ['id'],
+                if ($fk['column'] === null) {
+                    continue;
+                }
+                $key = $fk['column'];
+                $foreignKeys[$key] = [
+                    'columns' => [$fk['column']],
+                    'foreign_table' => $fk['on'] ?? '',
+                    'foreign_columns' => [
+                        $fk['references'] ?? 'id',
+                    ],
                     'on_update' => 'NO ACTION',
                     'on_delete' => 'NO ACTION',
                 ];
             }
 
-            // Process down() operations to detect net-zero
-            // (columns added then dropped = absent)
+            // Process down() operations to detect
+            // net-zero (columns added then dropped)
             foreach ($def->downOperations as $op) {
                 if (
                     preg_match(
@@ -242,13 +255,11 @@ class ConsolidationService
                         $m,
                     )
                 ) {
-                    // This is a down() drop — meaning the up()
-                    // added this column. If a later migration's
-                    // up() drops it, we process that separately.
+                    // down() drop = up() added. Skip.
                     continue;
                 }
 
-                // If down() has addColumn, the up() dropped it
+                // If down() has addColumn, up() dropped it
                 if (
                     preg_match(
                         '/^addColumn\((.+)\)$/',
@@ -256,7 +267,6 @@ class ConsolidationService
                         $m,
                     )
                 ) {
-                    // The up() dropped this column — remove it
                     $colName = trim($m[1], "'\" ");
                     unset($columns[$colName]);
                 }
@@ -275,7 +285,8 @@ class ConsolidationService
             'columns' => array_values($columns),
             'indexes' => array_values($indexes),
             'foreign_keys' => array_values($foreignKeys),
-            'has_approximated_types' => $hasApproximatedTypes,
+            'has_approximated_types'
+                => $hasApproximatedTypes,
         ];
     }
 
@@ -294,7 +305,7 @@ class ConsolidationService
         array &$foreignKeys,
     ): void {
         foreach ($def->downOperations as $op) {
-            // down() recreates a column → up() dropped it
+            // down() recreates a column -> up() dropped it
             if (str_starts_with($op, 'addColumn(')) {
                 $colName = $this->extractName($op);
 
@@ -303,7 +314,7 @@ class ConsolidationService
                 }
             }
 
-            // down() adds an index → up() dropped it
+            // down() adds an index -> up() dropped it
             if (
                 str_starts_with($op, 'addIndex(')
                 || str_starts_with($op, 'index(')
@@ -315,7 +326,7 @@ class ConsolidationService
                 }
             }
 
-            // down() adds an FK → up() dropped it
+            // down() adds an FK -> up() dropped it
             if (str_starts_with($op, 'addForeign(')) {
                 $fkName = $this->extractName($op);
 
@@ -343,132 +354,6 @@ class ConsolidationService
         }
 
         return null;
-    }
-
-    /**
-     * Map a Blueprint method name to SQL type info.
-     *
-     * @return array{type: string, type_name: string}
-     */
-    private function blueprintToType(
-        ?string $blueprintMethod,
-    ): array {
-        if ($blueprintMethod === null) {
-            return [
-                'type' => 'varchar(255)',
-                'type_name' => 'varchar',
-            ];
-        }
-
-        $map = [
-            'id' => ['bigint', 'bigint'],
-            'uuid' => ['char(36)', 'uuid'],
-            'ulid' => ['char(26)', 'ulid'],
-            'string' => ['varchar(255)', 'varchar'],
-            'text' => ['text', 'text'],
-            'mediumText' => ['mediumtext', 'mediumtext'],
-            'longText' => ['longtext', 'longtext'],
-            'tinyText' => ['tinytext', 'tinytext'],
-            'integer' => ['integer', 'integer'],
-            'bigInteger' => ['bigint', 'bigint'],
-            'smallInteger' => ['smallint', 'smallint'],
-            'tinyInteger' => ['tinyint', 'tinyint'],
-            'mediumInteger' => ['mediumint', 'mediumint'],
-            'unsignedBigInteger' => ['bigint', 'bigint'],
-            'unsignedInteger' => ['integer', 'integer'],
-            'unsignedSmallInteger' => [
-                'smallint', 'smallint',
-            ],
-            'unsignedTinyInteger' => [
-                'tinyint', 'tinyint',
-            ],
-            'unsignedMediumInteger' => [
-                'mediumint', 'mediumint',
-            ],
-            'float' => ['float', 'float'],
-            'double' => ['double', 'double'],
-            'decimal' => ['decimal(8,2)', 'decimal'],
-            'boolean' => ['boolean', 'boolean'],
-            'date' => ['date', 'date'],
-            'dateTime' => ['datetime', 'datetime'],
-            'dateTimeTz' => ['datetime', 'datetimetz'],
-            'time' => ['time', 'time'],
-            'timeTz' => ['time', 'timetz'],
-            'timestamp' => ['timestamp', 'timestamp'],
-            'timestampTz' => [
-                'timestamp', 'timestamptz',
-            ],
-            'timestamps' => [
-                'timestamp', 'timestamp',
-            ],
-            'timestampsTz' => [
-                'timestamp', 'timestamptz',
-            ],
-            'softDeletes' => [
-                'timestamp', 'timestamp',
-            ],
-            'softDeletesTz' => [
-                'timestamp', 'timestamptz',
-            ],
-            'json' => ['json', 'json'],
-            'jsonb' => ['jsonb', 'jsonb'],
-            'binary' => ['blob', 'binary'],
-            'enum' => ['enum', 'enum'],
-            'set' => ['set', 'set'],
-            'char' => ['char(255)', 'char'],
-            'year' => ['year', 'year'],
-            'foreignId' => ['bigint', 'bigint'],
-            'foreignUuid' => ['char(36)', 'uuid'],
-            'foreignUlid' => ['char(26)', 'ulid'],
-            'rememberToken' => [
-                'varchar(100)', 'varchar',
-            ],
-            'ipAddress' => [
-                'varchar(45)', 'varchar',
-            ],
-            'macAddress' => [
-                'varchar(17)', 'varchar',
-            ],
-            'morphs' => ['varchar(255)', 'varchar'],
-            'nullableMorphs' => [
-                'varchar(255)', 'varchar',
-            ],
-            'uuidMorphs' => ['char(36)', 'uuid'],
-            'nullableUuidMorphs' => [
-                'char(36)', 'uuid',
-            ],
-            'geometry' => ['geometry', 'geometry'],
-            'point' => ['point', 'point'],
-            'lineString' => [
-                'linestring', 'linestring',
-            ],
-            'polygon' => ['polygon', 'polygon'],
-            'multiPoint' => [
-                'multipoint', 'multipoint',
-            ],
-            'multiLineString' => [
-                'multilinestring', 'multilinestring',
-            ],
-            'multiPolygon' => [
-                'multipolygon', 'multipolygon',
-            ],
-            'geometryCollection' => [
-                'geometrycollection',
-                'geometrycollection',
-            ],
-        ];
-
-        if (isset($map[$blueprintMethod])) {
-            return [
-                'type' => $map[$blueprintMethod][0],
-                'type_name' => $map[$blueprintMethod][1],
-            ];
-        }
-
-        return [
-            'type' => 'varchar(255)',
-            'type_name' => 'varchar',
-        ];
     }
 
     private function skipReason(

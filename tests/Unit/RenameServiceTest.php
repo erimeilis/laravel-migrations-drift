@@ -18,8 +18,7 @@ class RenameServiceTest extends TestCase
 
         $this->service = new RenameService();
 
-        $this->tempDir = sys_get_temp_dir() . '/migration-drift-rename-service-test-' . uniqid();
-        mkdir($this->tempDir, 0755, true);
+        $this->tempDir = $this->createTempDirectory();
 
         $fixtures = glob(__DIR__ . '/../fixtures/migrations/*.php');
         foreach ($fixtures as $file) {
@@ -29,15 +28,7 @@ class RenameServiceTest extends TestCase
 
     protected function tearDown(): void
     {
-        if (is_dir($this->tempDir)) {
-            $files = glob($this->tempDir . '/*');
-            if ($files !== false) {
-                foreach ($files as $file) {
-                    unlink($file);
-                }
-            }
-            rmdir($this->tempDir);
-        }
+        $this->cleanTempDirectory($this->tempDir);
 
         parent::tearDown();
     }

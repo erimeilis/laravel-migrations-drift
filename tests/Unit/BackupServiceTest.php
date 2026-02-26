@@ -17,23 +17,18 @@ class BackupServiceTest extends TestCase
     {
         parent::setUp();
 
-        $this->backupPath = sys_get_temp_dir() . '/migration-drift-test-' . uniqid();
-        config()->set('migration-drift.backup_path', $this->backupPath);
+        $this->backupPath = $this->createTempDirectory();
+        config()->set(
+            'migration-drift.backup_path',
+            $this->backupPath,
+        );
 
         $this->service = new BackupService();
     }
 
     protected function tearDown(): void
     {
-        if (is_dir($this->backupPath)) {
-            $files = glob($this->backupPath . '/*');
-            if ($files !== false) {
-                foreach ($files as $file) {
-                    unlink($file);
-                }
-            }
-            rmdir($this->backupPath);
-        }
+        $this->cleanTempDirectory($this->backupPath);
 
         parent::tearDown();
     }
@@ -170,7 +165,6 @@ class BackupServiceTest extends TestCase
     public function test_restore_rejects_non_string_migration(): void
     {
         $filepath = $this->backupPath . '/bad-types.json';
-        mkdir($this->backupPath, 0755, true);
         file_put_contents($filepath, json_encode([
             ['migration' => 123, 'batch' => 1],
         ]));
@@ -184,7 +178,6 @@ class BackupServiceTest extends TestCase
     public function test_restore_rejects_non_int_batch(): void
     {
         $filepath = $this->backupPath . '/bad-batch.json';
-        mkdir($this->backupPath, 0755, true);
         file_put_contents($filepath, json_encode([
             ['migration' => '2026_01_01_000001_test', 'batch' => 'one'],
         ]));

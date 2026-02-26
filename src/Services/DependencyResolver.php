@@ -79,7 +79,7 @@ class DependencyResolver
             }
         }
 
-        return $cycles;
+        return $this->deduplicateCycles($cycles);
     }
 
     /**
@@ -169,6 +169,45 @@ class DependencyResolver
         }
 
         return $pivots;
+    }
+
+    /**
+     * Deduplicate cycles by normalizing rotation.
+     *
+     * @param array<int, string[]> $cycles
+     * @return array<int, string[]>
+     */
+    private function deduplicateCycles(array $cycles): array
+    {
+        $seen = [];
+        $unique = [];
+
+        foreach ($cycles as $cycle) {
+            // Remove the repeated last element
+            $clean = array_slice($cycle, 0, -1);
+
+            // Rotate to start with lexicographically smallest
+            $minIdx = 0;
+            for ($i = 1; $i < count($clean); $i++) {
+                if ($clean[$i] < $clean[$minIdx]) {
+                    $minIdx = $i;
+                }
+            }
+            $normalized = array_merge(
+                array_slice($clean, $minIdx),
+                array_slice($clean, 0, $minIdx),
+            );
+
+            $key = implode(',', $normalized);
+            if (!isset($seen[$key])) {
+                $seen[$key] = true;
+                // Re-add the closing element
+                $normalized[] = $normalized[0];
+                $unique[] = $normalized;
+            }
+        }
+
+        return $unique;
     }
 
     /**

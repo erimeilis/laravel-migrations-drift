@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace EriMeilis\MigrationDrift\Concerns;
 
 use Illuminate\Support\Facades\Artisan;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 
 use function Laravel\Prompts\confirm;
@@ -19,19 +20,66 @@ trait InteractivePrompts
             return $this->option('connection');
         }
 
-        $connections = array_keys(config('database.connections', []));
-        $default = config('database.default', 'mysql');
+        $configured = config(
+            'migration-drift.connection',
+        );
+        if (is_string($configured)) {
+            return $configured;
+        }
 
-        if (count($connections) <= 1 || !$this->isInteractive()) {
+        $connections = array_keys(
+            config('database.connections', []),
+        );
+        $default = config(
+            'database.default',
+            'mysql',
+        );
+
+        if (
+            count($connections) <= 1
+            || !$this->isInteractive()
+        ) {
             return $default;
         }
 
         return select(
             label: 'Select database connection',
-            options: array_combine($connections, $connections),
+            options: array_combine(
+                $connections,
+                $connections,
+            ),
             default: $default,
             hint: 'The database connection to analyze',
         );
+    }
+
+    /**
+     * Execute a callback with the selected database connection,
+     * restoring the original connection afterward.
+     *
+     * @template T
+     * @param callable(): T $callback
+     * @return T
+     */
+    protected function withSelectedConnection(callable $callback): mixed
+    {
+        $connection = $this->selectConnection();
+        $original = (string) config('database.default');
+
+        if ($connection !== $original) {
+            config()->set('database.default', $connection);
+            DB::setDefaultConnection($connection);
+            DB::purge($connection);
+        }
+
+        try {
+            return $callback();
+        } finally {
+            if ($connection !== $original) {
+                config()->set('database.default', $original);
+                DB::setDefaultConnection($original);
+            }
+        }
     }
 
     protected function selectPath(): string

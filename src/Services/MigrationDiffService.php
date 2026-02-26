@@ -22,8 +22,11 @@ class MigrationDiffService
     {
         $path = $migrationsPath ?? config('migration-drift.migrations_path');
 
-        if (!is_dir($path)) {
-            throw new \InvalidArgumentException("Migrations path does not exist: {$path}");
+        if (!is_string($path) || !is_dir($path)) {
+            throw new \InvalidArgumentException(
+                'Migrations path does not exist: '
+                . (is_string($path) ? $path : '(not configured)'),
+            );
         }
 
         $fileNames = $this->getMigrationFilenames($path);

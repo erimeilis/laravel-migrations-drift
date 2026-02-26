@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace EriMeilis\MigrationDrift\Tests\Feature;
 
+use EriMeilis\MigrationDrift\Services\SchemaComparator;
 use EriMeilis\MigrationDrift\Tests\TestCase;
 use Illuminate\Support\Facades\DB;
 
@@ -15,9 +16,11 @@ class FixCommandTest extends TestCase
     {
         parent::setUp();
 
-        $this->backupPath = sys_get_temp_dir()
-            . '/migration-drift-fix-test-' . uniqid();
-        config()->set('migration-drift.backup_path', $this->backupPath);
+        $this->backupPath = $this->createTempDirectory();
+        config()->set(
+            'migration-drift.backup_path',
+            $this->backupPath,
+        );
         config()->set(
             'migration-drift.migrations_path',
             __DIR__ . '/../fixtures/migrations',
@@ -26,15 +29,7 @@ class FixCommandTest extends TestCase
 
     protected function tearDown(): void
     {
-        if (is_dir($this->backupPath)) {
-            $files = glob($this->backupPath . '/*');
-            if ($files !== false) {
-                foreach ($files as $file) {
-                    unlink($file);
-                }
-            }
-            rmdir($this->backupPath);
-        }
+        $this->cleanTempDirectory($this->backupPath);
 
         parent::tearDown();
     }
@@ -236,6 +231,78 @@ class FixCommandTest extends TestCase
         if (
             is_dir($tmpParent)
             && count(scandir($tmpParent)) === 2
+        ) {
+            rmdir($tmpParent);
+        }
+    }
+
+    public function test_schema_force_generates_migrations(): void
+    {
+        $diff = [
+            'missing_tables' => [],
+            'extra_tables' => ['legacy_temp'],
+            'column_diffs' => [
+                'users' => [
+                    'missing' => ['phone'],
+                    'extra' => [],
+                    'type_mismatches' => [],
+                    'nullable_mismatches' => [],
+                    'default_mismatches' => [],
+                ],
+            ],
+            'index_diffs' => [],
+            'fk_diffs' => [],
+            'missing_table_details' => [],
+        ];
+
+        $mock = $this->createMock(
+            SchemaComparator::class,
+        );
+        $mock->method('compare')
+            ->willReturn($diff);
+        $mock->method('hasDifferences')
+            ->willReturn(true);
+
+        $this->app->instance(
+            SchemaComparator::class,
+            $mock,
+        );
+
+        $projectRoot = \dirname(__DIR__, 2);
+        $tmpDir = $projectRoot
+            . '/tmp/schema-force-' . uniqid();
+        mkdir($tmpDir, 0755, true);
+
+        // Create a dummy migration so fileCount > 0
+        file_put_contents(
+            $tmpDir . '/2026_01_01_000001_stub.php',
+            "<?php\nreturn new class extends "
+            . "\\Illuminate\\Database\\Migrations"
+            . "\\Migration {\n"
+            . "    public function up(): void {}\n"
+            . "    public function down(): void {}\n"
+            . "};\n",
+        );
+
+        $this->artisan('migrations:fix', [
+            '--schema' => true,
+            '--force' => true,
+            '--path' => $tmpDir,
+        ])
+            ->expectsOutputToContain('corrective migration')
+            ->assertSuccessful();
+
+        // Clean up
+        $files = glob($tmpDir . '/*.php');
+        if ($files !== false) {
+            array_map('unlink', $files);
+        }
+        rmdir($tmpDir);
+
+        $tmpParent = $projectRoot . '/tmp';
+        if (
+            is_dir($tmpParent)
+            && \count(scandir($tmpParent)) === 2
         ) {
             rmdir($tmpParent);
         }

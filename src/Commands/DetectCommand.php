@@ -21,6 +21,8 @@ class DetectCommand extends Command
     use InteractivePrompts;
     use ResolvesPath;
 
+    private const TABLE_DISPLAY_THRESHOLD = 3;
+
     protected $signature = 'migrations:detect
         {--connection= : Database connection to use}
         {--path= : Override migrations path}
@@ -37,139 +39,145 @@ class DetectCommand extends Command
         CodeQualityAnalyzer $analyzer,
     ): int {
         $connection = $this->selectConnection();
-        $currentConnection = (string) config('database.default');
+        $originalConnection = (string) config('database.default');
 
-        if ($connection !== $currentConnection) {
+        if ($connection !== $originalConnection) {
             config()->set('database.default', $connection);
             DB::setDefaultConnection($connection);
             DB::purge($connection);
         }
 
         try {
-            $path = $this->resolveMigrationsPath(
-                $this->selectPath()
-            );
-        } catch (\InvalidArgumentException $e) {
-            $this->error($e->getMessage());
+            try {
+                $path = $this->resolveMigrationsPath(
+                    $this->selectPath()
+                );
+            } catch (\InvalidArgumentException $e) {
+                $this->error($e->getMessage());
 
-            return self::FAILURE;
-        }
+                return self::FAILURE;
+            }
 
-        if (!$this->ensureMigrationsTableExists()) {
-            return self::FAILURE;
-        }
+            if (!$this->ensureMigrationsTableExists()) {
+                return self::FAILURE;
+            }
 
-        if ($this->getMigrationFileCount($path) === 0) {
-            $this->info("No migration files found in {$path}");
+            if ($this->getMigrationFileCount($path) === 0) {
+                $this->info("No migration files found in {$path}");
 
-            return self::SUCCESS;
-        }
+                return self::SUCCESS;
+            }
 
-        if ($this->option('verify-roundtrip')) {
-            $this->error(
-                'Roundtrip verification is not yet implemented.',
-            );
+            if ($this->option('verify-roundtrip')) {
+                $this->warn(
+                    'Roundtrip verification is not yet'
+                    . ' implemented. Skipping.',
+                );
+            }
 
-            return self::FAILURE;
-        }
-
-        if ($this->isInteractive()) {
-            $result = spin(
-                callback: fn (): array => $this->analyze(
+            if ($this->isInteractive()) {
+                $result = spin(
+                    callback: fn (): array => $this->analyze(
+                        $diffService,
+                        $schemaComparator,
+                        $parser,
+                        $analyzer,
+                        $path,
+                    ),
+                    message: 'Analyzing migration drift...',
+                );
+            } else {
+                $result = $this->analyze(
                     $diffService,
                     $schemaComparator,
                     $parser,
                     $analyzer,
                     $path,
-                ),
-                message: 'Analyzing migration drift...',
-            );
-        } else {
-            $result = $this->analyze(
-                $diffService,
-                $schemaComparator,
-                $parser,
-                $analyzer,
-                $path,
-            );
-        }
-
-        /** @var array{stale: string[], missing: string[], matched: string[]} $tableDiff */
-        $tableDiff = $result['table'];
-
-        /** @var array{missing_tables: string[], extra_tables: string[], column_diffs: array<string, array<string, mixed>>, index_diffs: array<string, array<string, mixed>>, fk_diffs: array<string, array<string, mixed>>}|null $schemaDiff */
-        $schemaDiff = $result['schema'];
-
-        /** @var array<int, array{type: string, severity: string, message: string, migration: string}> $qualityIssues */
-        $qualityIssues = $result['quality'] ?? [];
-
-        if ($this->option('json')) {
-            $this->line((string) json_encode(
-                [
-                    'table_drift' => $tableDiff,
-                    'schema_drift' => $schemaDiff,
-                    'quality_issues' => $qualityIssues,
-                ],
-                JSON_PRETTY_PRINT | JSON_THROW_ON_ERROR,
-            ));
-
-            $hasDrift = !empty($tableDiff['stale'])
-                || !empty($tableDiff['missing']);
-
-            if (
-                !$hasDrift
-                && $schemaDiff !== null
-                && $schemaComparator->hasDifferences($schemaDiff)
-            ) {
-                $hasDrift = true;
+                );
             }
 
-            return $hasDrift ? self::FAILURE : self::SUCCESS;
+            /** @var array{stale: string[], missing: string[], matched: string[]} $tableDiff */
+            $tableDiff = $result['table'];
+
+            /** @var array{missing_tables: string[], extra_tables: string[], column_diffs: array<string, array<string, mixed>>, index_diffs: array<string, array<string, mixed>>, fk_diffs: array<string, array<string, mixed>>}|null $schemaDiff */
+            $schemaDiff = $result['schema'];
+
+            /** @var array<int, array{type: string, severity: string, message: string, migration: string}> $qualityIssues */
+            $qualityIssues = $result['quality'] ?? [];
+
+            if ($this->option('json')) {
+                $this->line((string) json_encode(
+                    [
+                        'table_drift' => $tableDiff,
+                        'schema_drift' => $schemaDiff,
+                        'quality_issues' => $qualityIssues,
+                    ],
+                    JSON_PRETTY_PRINT | JSON_THROW_ON_ERROR,
+                ));
+
+                $hasDrift = !empty($tableDiff['stale'])
+                    || !empty($tableDiff['missing']);
+
+                if (
+                    !$hasDrift
+                    && $schemaDiff !== null
+                    && $schemaComparator->hasDifferences($schemaDiff)
+                ) {
+                    $hasDrift = true;
+                }
+
+                return $hasDrift ? self::FAILURE : self::SUCCESS;
+            }
+
+            $hasDrift = false;
+
+            $hasDrift = $this->renderStaleEntries(
+                $tableDiff['stale'],
+                $hasDrift,
+            );
+
+            $hasDrift = $this->renderMissingEntries(
+                $tableDiff['missing'],
+                $hasDrift,
+            );
+
+            if (!$hasDrift && !empty($tableDiff['matched'])) {
+                $count = count($tableDiff['matched']);
+                $this->info("{$count} migrations matched.");
+            }
+
+            $hasDrift = $this->renderSchemaDiff(
+                $schemaDiff,
+                $schemaComparator,
+                $hasDrift,
+            );
+
+            $this->renderQualityIssues($qualityIssues);
+
+            /** @var string[] $analysisWarnings */
+            $analysisWarnings = $result['warnings'] ?? [];
+
+            foreach ($analysisWarnings as $warning) {
+                $this->warn($warning);
+            }
+
+            $this->newLine();
+
+            if ($hasDrift) {
+                $this->error('DRIFT DETECTED');
+
+                return self::FAILURE;
+            }
+
+            $this->info('No drift detected.');
+
+            return self::SUCCESS;
+        } finally {
+            if ($connection !== $originalConnection) {
+                config()->set('database.default', $originalConnection);
+                DB::setDefaultConnection($originalConnection);
+            }
         }
-
-        $hasDrift = false;
-
-        $hasDrift = $this->renderStaleEntries(
-            $tableDiff['stale'],
-            $hasDrift,
-        );
-
-        $hasDrift = $this->renderMissingEntries(
-            $tableDiff['missing'],
-            $hasDrift,
-        );
-
-        if (!$hasDrift && !empty($tableDiff['matched'])) {
-            $count = count($tableDiff['matched']);
-            $this->info("{$count} migrations matched.");
-        }
-
-        $hasDrift = $this->renderSchemaDiff(
-            $schemaDiff,
-            $schemaComparator,
-            $hasDrift,
-        );
-
-        $this->renderQualityIssues($qualityIssues);
-
-        /** @var string[] $analysisWarnings */
-        $analysisWarnings = $result['warnings'] ?? [];
-
-        foreach ($analysisWarnings as $warning) {
-            $this->warn($warning);
-        }
-
-        $this->newLine();
-
-        if ($hasDrift) {
-            $this->error('DRIFT DETECTED');
-
-            return self::FAILURE;
-        }
-
-        $this->info('No drift detected.');
-
-        return self::SUCCESS;
     }
 
     /**
@@ -267,7 +275,7 @@ class DetectCommand extends Command
             'Stale migration records (in DB but no file):'
         );
 
-        if (count($stale) > 3) {
+        if (count($stale) > self::TABLE_DISPLAY_THRESHOLD) {
             table(
                 headers: ['Migration'],
                 rows: array_values(array_map(
@@ -300,7 +308,7 @@ class DetectCommand extends Command
             . '(file exists but not in DB):'
         );
 
-        if (count($missing) > 3) {
+        if (count($missing) > self::TABLE_DISPLAY_THRESHOLD) {
             table(
                 headers: ['Migration'],
                 rows: array_values(array_map(

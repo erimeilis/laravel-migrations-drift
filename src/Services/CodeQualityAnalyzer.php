@@ -107,13 +107,10 @@ class CodeQualityAnalyzer
         $hasDropForeign = false;
 
         foreach ($migration->downOperations as $op) {
-            if (str_starts_with($op, 'dropForeign')) {
-                $hasDropForeign = true;
-
-                break;
-            }
-
-            if (str_starts_with($op, 'dropConstrainedForeignId')) {
+            if (
+                str_starts_with($op, 'dropForeign')
+                || str_starts_with($op, 'dropConstrainedForeignId')
+            ) {
                 $hasDropForeign = true;
 
                 break;
@@ -279,10 +276,7 @@ class CodeQualityAnalyzer
         MigrationDefinition $migration,
     ): bool {
         foreach ($migration->downOperations as $op) {
-            if (
-                str_starts_with($op, 'Schema::drop')
-                || str_starts_with($op, 'Schema::dropIfExists')
-            ) {
+            if (str_starts_with($op, 'Schema::drop')) {
                 return true;
             }
         }

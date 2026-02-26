@@ -78,6 +78,30 @@ class BackupService
             throw new InvalidArgumentException("Backup file does not exist: {$filepath}");
         }
 
+        $realPath = realpath($filepath);
+        if ($realPath === false) {
+            throw new InvalidArgumentException(
+                "Backup file path could not be resolved: {$filepath}"
+            );
+        }
+
+        $backupDir = config('migration-drift.backup_path');
+        $realBackupDir = is_string($backupDir)
+            ? realpath($backupDir) : false;
+
+        if (
+            $realBackupDir !== false
+            && !str_starts_with(
+                $realPath,
+                $realBackupDir . DIRECTORY_SEPARATOR,
+            )
+        ) {
+            throw new InvalidArgumentException(
+                'Backup file is outside the configured'
+                . ' backup directory.',
+            );
+        }
+
         $contents = file_get_contents($filepath);
         if ($contents === false) {
             throw new RuntimeException("Failed to read backup file: {$filepath}");
@@ -123,7 +147,7 @@ class BackupService
     {
         $backupPath = config('migration-drift.backup_path');
 
-        if (!is_dir($backupPath)) {
+        if (!is_string($backupPath) || !is_dir($backupPath)) {
             return null;
         }
 
@@ -134,7 +158,7 @@ class BackupService
         }
 
         // Sort by modification time to get the most recent
-        usort($files, fn (string $a, string $b) => filemtime($b) <=> filemtime($a));
+        usort($files, fn (string $a, string $b) => (filemtime($b) ?: 0) <=> (filemtime($a) ?: 0));
 
         return $files[0];
     }
@@ -145,6 +169,11 @@ class BackupService
     private function rotate(): void
     {
         $backupPath = config('migration-drift.backup_path');
+
+        if (!is_string($backupPath)) {
+            return;
+        }
+
         $maxBackups = (int) config('migration-drift.max_backups');
 
         $files = glob($backupPath . '/backup-*.json');
@@ -154,7 +183,7 @@ class BackupService
         }
 
         // Sort by modification time, oldest first
-        usort($files, fn (string $a, string $b) => filemtime($a) <=> filemtime($b));
+        usort($files, fn (string $a, string $b) => (filemtime($a) ?: 0) <=> (filemtime($b) ?: 0));
 
         $excess = count($files) - $maxBackups;
 

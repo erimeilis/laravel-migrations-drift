@@ -134,6 +134,14 @@ class SchemaIntrospector
             $type,
         );
 
+        // Strip precision from temporal types
+        // e.g. timestamp(6) → timestamp, datetime(3) → datetime
+        $type = (string) preg_replace(
+            '/^((?:timestamp|datetime|time)(?:tz)?)\(\d+\)/',
+            '$1',
+            $type,
+        );
+
         $aliases = [
             'int' => 'integer',
             'bool' => 'boolean',
