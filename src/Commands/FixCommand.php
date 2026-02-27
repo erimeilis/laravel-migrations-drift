@@ -151,12 +151,25 @@ class FixCommand extends Command
             return $result;
         }
 
+        // Collect NEW_MIGRATION filenames to exclude from schema
+        // comparison — they haven't run yet, so including them
+        // would generate duplicate corrective files for changes
+        // that `php artisan migrate` will handle.
+        $newMigrationFiles = array_map(
+            fn (MigrationState $s): string => $s->migrationName,
+            array_filter(
+                $states,
+                fn (MigrationState $s): bool => $s->status === MigrationStatus::NEW_MIGRATION,
+            ),
+        );
+
         // Run global schema comparison for remaining drift
         return $this->fixSchemaDrift(
             $schemaComparator,
             $introspector,
             $generator,
             $path,
+            $newMigrationFiles,
         );
     }
 
@@ -249,15 +262,18 @@ class FixCommand extends Command
 
     /**
      * Run global schema comparison and generate corrective migrations.
+     *
+     * @param string[] $excludeFiles Migration filenames to exclude from comparison
      */
     private function fixSchemaDrift(
         SchemaComparator $schemaComparator,
         SchemaIntrospector $introspector,
         MigrationGenerator $generator,
         string $path,
+        array $excludeFiles = [],
     ): int {
         try {
-            $schemaDiff = $schemaComparator->compare();
+            $schemaDiff = $schemaComparator->compare($excludeFiles);
         } catch (\Throwable $e) {
             $this->warn(
                 'Schema comparison skipped: '

@@ -18,9 +18,10 @@ class SchemaComparator
      * Perform a full schema comparison by creating a temp DB,
      * running migrations on it, and diffing both schemas.
      *
+     * @param string[] $excludeFiles Migration filenames (without .php) to exclude from the temp DB run
      * @return array{missing_tables: string[], extra_tables: string[], column_diffs: array<string, array<string, mixed>>, index_diffs: array<string, array<string, mixed>>, fk_diffs: array<string, array<string, mixed>>, missing_table_details: array<string, array{columns: array<int, array<string, mixed>>, indexes: array<int, array<string, mixed>>, foreign_keys: array<int, array<string, mixed>>}>}
      */
-    public function compare(): array
+    public function compare(array $excludeFiles = []): array
     {
         $defaultConnection = Config::get('database.default');
         $currentDb = Config::get(
@@ -39,6 +40,7 @@ class SchemaComparator
             . bin2hex(random_bytes(4));
         $grammar = DB::connection()->getQueryGrammar();
         $quotedDb = $grammar->wrap($tempDb);
+        $filteredDir = null;
 
         try {
             DB::statement("CREATE DATABASE {$quotedDb}");
@@ -53,10 +55,25 @@ class SchemaComparator
                 ),
             );
 
-            Artisan::call('migrate', [
+            $migrateArgs = [
                 '--database' => 'drift_verify',
                 '--force' => true,
-            ]);
+            ];
+
+            // If we need to exclude files, copy non-excluded
+            // migrations to a temp directory and use --path
+            if (!empty($excludeFiles)) {
+                $filteredDir = $this->createFilteredMigrationDir(
+                    $excludeFiles,
+                );
+
+                if ($filteredDir !== null) {
+                    $migrateArgs['--path'] = $filteredDir;
+                    $migrateArgs['--realpath'] = true;
+                }
+            }
+
+            Artisan::call('migrate', $migrateArgs);
 
             $currentSchema = $this->introspector->getFullSchema(
                 $defaultConnection,
@@ -92,6 +109,11 @@ class SchemaComparator
 
             return $diff;
         } finally {
+            // Clean up filtered migration directory
+            if ($filteredDir !== null) {
+                $this->cleanFilteredMigrationDir($filteredDir);
+            }
+
             try {
                 DB::purge('drift_verify');
             } catch (\Throwable) {
@@ -114,6 +136,68 @@ class SchemaComparator
                 null,
             );
         }
+    }
+
+    /**
+     * Create a temp directory with migration files, excluding
+     * specified filenames (used to skip NEW_MIGRATION files).
+     *
+     * @param string[] $excludeFiles Filenames without .php extension
+     */
+    private function createFilteredMigrationDir(
+        array $excludeFiles,
+    ): ?string {
+        $migrationPath = (string) config(
+            'migration-drift.migrations_path',
+            database_path('migrations'),
+        );
+
+        if (!is_dir($migrationPath)) {
+            return null;
+        }
+
+        $tempDir = sys_get_temp_dir()
+            . '/migration-drift-filtered-'
+            . bin2hex(random_bytes(4));
+
+        if (!mkdir($tempDir, 0700, true)) {
+            return null;
+        }
+
+        $excludeSet = array_flip($excludeFiles);
+        $files = glob($migrationPath . '/*.php');
+
+        if ($files === false) {
+            @rmdir($tempDir);
+
+            return null;
+        }
+
+        foreach ($files as $file) {
+            $basename = pathinfo($file, PATHINFO_FILENAME);
+
+            if (isset($excludeSet[$basename])) {
+                continue;
+            }
+
+            copy($file, $tempDir . '/' . basename($file));
+        }
+
+        return $tempDir;
+    }
+
+    /**
+     * Clean up a filtered migration directory.
+     */
+    private function cleanFilteredMigrationDir(string $dir): void
+    {
+        $files = glob($dir . '/*.php');
+
+        if ($files !== false) {
+            array_map('unlink', $files);
+        }
+
+        @rmdir($dir);
     }
 
     /**
