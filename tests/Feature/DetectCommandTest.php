@@ -96,7 +96,7 @@ class DetectCommandTest extends TestCase
 
         $this->assertSame(1, $exitCode);
         $this->assertStringContainsString(
-            '"table_drift"',
+            '"migration_states"',
             $output,
         );
         $this->assertStringContainsString(
@@ -108,7 +108,7 @@ class DetectCommandTest extends TestCase
     public function test_json_output_clean(): void
     {
         $this->artisan('migrations:detect', ['--json' => true])
-            ->expectsOutputToContain('"table_drift"')
+            ->expectsOutputToContain('"migration_states"')
             ->assertExitCode(0);
     }
 

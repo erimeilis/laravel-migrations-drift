@@ -14,6 +14,7 @@ use EriMeilis\MigrationDrift\Services\DependencyResolver;
 use EriMeilis\MigrationDrift\Services\MigrationDiffService;
 use EriMeilis\MigrationDrift\Services\MigrationGenerator;
 use EriMeilis\MigrationDrift\Services\MigrationParser;
+use EriMeilis\MigrationDrift\Services\MigrationStateAnalyzer;
 use EriMeilis\MigrationDrift\Services\RenameService;
 use EriMeilis\MigrationDrift\Services\SchemaComparator;
 use EriMeilis\MigrationDrift\Services\SchemaIntrospector;
@@ -68,6 +69,15 @@ class MigrationDriftServiceProvider extends ServiceProvider
         $this->app->singleton(RenameService::class);
 
         $this->app->singleton(DependencyResolver::class);
+
+        $this->app->singleton(
+            MigrationStateAnalyzer::class,
+            fn ($app) => new MigrationStateAnalyzer(
+                $app->make(MigrationDiffService::class),
+                $app->make(MigrationParser::class),
+                $app->make(SchemaIntrospector::class),
+            ),
+        );
     }
 
     public function boot(): void

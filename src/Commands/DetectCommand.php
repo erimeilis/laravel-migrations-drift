@@ -7,8 +7,10 @@ namespace EriMeilis\MigrationDrift\Commands;
 use EriMeilis\MigrationDrift\Concerns\InteractivePrompts;
 use EriMeilis\MigrationDrift\Concerns\ResolvesPath;
 use EriMeilis\MigrationDrift\Services\CodeQualityAnalyzer;
-use EriMeilis\MigrationDrift\Services\MigrationDiffService;
 use EriMeilis\MigrationDrift\Services\MigrationParser;
+use EriMeilis\MigrationDrift\Services\MigrationState;
+use EriMeilis\MigrationDrift\Services\MigrationStateAnalyzer;
+use EriMeilis\MigrationDrift\Services\MigrationStatus;
 use EriMeilis\MigrationDrift\Services\SchemaComparator;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\DB;
@@ -33,10 +35,10 @@ class DetectCommand extends Command
         = 'Detect drift between migration files and database state';
 
     public function handle(
-        MigrationDiffService $diffService,
+        MigrationStateAnalyzer $analyzer,
         SchemaComparator $schemaComparator,
         MigrationParser $parser,
-        CodeQualityAnalyzer $analyzer,
+        CodeQualityAnalyzer $qualityAnalyzer,
     ): int {
         $connection = $this->selectConnection();
         $originalConnection = (string) config('database.default');
@@ -78,26 +80,26 @@ class DetectCommand extends Command
             if ($this->isInteractive()) {
                 $result = spin(
                     callback: fn (): array => $this->analyze(
-                        $diffService,
+                        $analyzer,
                         $schemaComparator,
                         $parser,
-                        $analyzer,
+                        $qualityAnalyzer,
                         $path,
                     ),
                     message: 'Analyzing migration drift...',
                 );
             } else {
                 $result = $this->analyze(
-                    $diffService,
+                    $analyzer,
                     $schemaComparator,
                     $parser,
-                    $analyzer,
+                    $qualityAnalyzer,
                     $path,
                 );
             }
 
-            /** @var array{stale: string[], missing: string[], matched: string[]} $tableDiff */
-            $tableDiff = $result['table'];
+            /** @var MigrationState[] $states */
+            $states = $result['states'];
 
             /** @var array{missing_tables: string[], extra_tables: string[], column_diffs: array<string, array<string, mixed>>, index_diffs: array<string, array<string, mixed>>, fk_diffs: array<string, array<string, mixed>>}|null $schemaDiff */
             $schemaDiff = $result['schema'];
@@ -106,17 +108,27 @@ class DetectCommand extends Command
             $qualityIssues = $result['quality'] ?? [];
 
             if ($this->option('json')) {
+                $stateData = array_map(
+                    fn (MigrationState $s): array => [
+                        'migration' => $s->migrationName,
+                        'status' => $s->status->name,
+                        'table' => $s->tableName,
+                        'partial_analysis' => $s->partialAnalysis,
+                        'warnings' => $s->warnings,
+                    ],
+                    $states,
+                );
+
                 $this->line((string) json_encode(
                     [
-                        'table_drift' => $tableDiff,
+                        'migration_states' => $stateData,
                         'schema_drift' => $schemaDiff,
                         'quality_issues' => $qualityIssues,
                     ],
                     JSON_PRETTY_PRINT | JSON_THROW_ON_ERROR,
                 ));
 
-                $hasDrift = !empty($tableDiff['stale'])
-                    || !empty($tableDiff['missing']);
+                $hasDrift = $this->statesHaveDrift($states);
 
                 if (
                     !$hasDrift
@@ -131,20 +143,10 @@ class DetectCommand extends Command
 
             $hasDrift = false;
 
-            $hasDrift = $this->renderStaleEntries(
-                $tableDiff['stale'],
+            $hasDrift = $this->renderStateAnalysis(
+                $states,
                 $hasDrift,
             );
-
-            $hasDrift = $this->renderMissingEntries(
-                $tableDiff['missing'],
-                $hasDrift,
-            );
-
-            if (!$hasDrift && !empty($tableDiff['matched'])) {
-                $count = count($tableDiff['matched']);
-                $this->info("{$count} migrations matched.");
-            }
 
             $hasDrift = $this->renderSchemaDiff(
                 $schemaDiff,
@@ -181,19 +183,16 @@ class DetectCommand extends Command
     }
 
     /**
-     * Run table diff, schema comparison, and code quality
-     * analysis.
-     *
      * @return array<string, mixed>
      */
     private function analyze(
-        MigrationDiffService $diffService,
+        MigrationStateAnalyzer $analyzer,
         SchemaComparator $schemaComparator,
         MigrationParser $parser,
-        CodeQualityAnalyzer $analyzer,
+        CodeQualityAnalyzer $qualityAnalyzer,
         string $path,
     ): array {
-        $tableDiff = $diffService->computeDiff($path);
+        $states = $analyzer->analyze($path);
         $schemaDiff = null;
         $warnings = [];
 
@@ -208,7 +207,7 @@ class DetectCommand extends Command
 
         try {
             $definitions = $parser->parseDirectory($path);
-            $qualityIssues = $analyzer->analyzeAll(
+            $qualityIssues = $qualityAnalyzer->analyzeAll(
                 $definitions,
             );
         } catch (\Throwable $e) {
@@ -217,11 +216,125 @@ class DetectCommand extends Command
         }
 
         return [
-            'table' => $tableDiff,
+            'states' => $states,
             'schema' => $schemaDiff,
             'quality' => $qualityIssues,
             'warnings' => $warnings,
         ];
+    }
+
+    /**
+     * @param MigrationState[] $states
+     */
+    private function renderStateAnalysis(
+        array $states,
+        bool $hasDrift,
+    ): bool {
+        $grouped = [];
+        foreach ($states as $state) {
+            $grouped[$state->status->name][] = $state;
+        }
+
+        $okCount = count($grouped['OK'] ?? []);
+        $newCount = count($grouped['NEW_MIGRATION'] ?? []);
+
+        if ($okCount > 0) {
+            $this->info("{$okCount} migration(s) OK.");
+        }
+
+        if ($newCount > 0) {
+            $names = array_map(
+                fn (MigrationState $s): string => $s->migrationName,
+                $grouped['NEW_MIGRATION'],
+            );
+            $this->info(
+                "{$newCount} new migration(s) pending:",
+            );
+            foreach ($names as $name) {
+                $this->line("  <fg=green>+ {$name}</>");
+            }
+        }
+
+        $statusConfig = [
+            'BOGUS_RECORD' => [
+                'color' => 'red',
+                'label' => 'Bogus records (registered but never ran)',
+                'isDrift' => true,
+            ],
+            'MISSING_FILE' => [
+                'color' => 'yellow',
+                'label' => 'Missing files (ran but file deleted)',
+                'isDrift' => true,
+            ],
+            'ORPHAN_RECORD' => [
+                'color' => 'magenta',
+                'label' => 'Orphan records (no file, no schema)',
+                'isDrift' => true,
+            ],
+            'LOST_RECORD' => [
+                'color' => 'cyan',
+                'label' => 'Lost records (ran but not registered)',
+                'isDrift' => true,
+            ],
+        ];
+
+        foreach ($statusConfig as $statusName => $config) {
+            $items = $grouped[$statusName] ?? [];
+            if (empty($items)) {
+                continue;
+            }
+
+            $hasDrift = true;
+
+            $this->newLine();
+            $this->warn($config['label'] . ':');
+
+            if (count($items) > self::TABLE_DISPLAY_THRESHOLD) {
+                table(
+                    headers: ['Migration', 'Table'],
+                    rows: array_map(
+                        static fn (MigrationState $s): array => [
+                            $s->migrationName,
+                            $s->tableName ?? '(unknown)',
+                        ],
+                        $items,
+                    ),
+                );
+            } else {
+                foreach ($items as $state) {
+                    $this->line(
+                        "  <fg={$config['color']}>"
+                        . "{$state->migrationName}</>",
+                    );
+
+                    foreach ($state->warnings as $warning) {
+                        $this->line(
+                            "    <fg=yellow>!</> {$warning}",
+                        );
+                    }
+                }
+            }
+        }
+
+        return $hasDrift;
+    }
+
+    /**
+     * @param MigrationState[] $states
+     */
+    private function statesHaveDrift(array $states): bool
+    {
+        foreach ($states as $state) {
+            if (!in_array(
+                $state->status,
+                [MigrationStatus::OK, MigrationStatus::NEW_MIGRATION],
+                true,
+            )) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**
@@ -258,71 +371,6 @@ class DetectCommand extends Command
                 $issue['migration'],
             ));
         }
-    }
-
-    /**
-     * @param string[] $stale
-     */
-    private function renderStaleEntries(
-        array $stale,
-        bool $hasDrift,
-    ): bool {
-        if (empty($stale)) {
-            return $hasDrift;
-        }
-
-        $this->warn(
-            'Stale migration records (in DB but no file):'
-        );
-
-        if (count($stale) > self::TABLE_DISPLAY_THRESHOLD) {
-            table(
-                headers: ['Migration'],
-                rows: array_values(array_map(
-                    static fn (string $n): array => [$n],
-                    $stale,
-                )),
-            );
-        } else {
-            foreach ($stale as $name) {
-                $this->line("  <fg=red>- {$name}</>");
-            }
-        }
-
-        return true;
-    }
-
-    /**
-     * @param string[] $missing
-     */
-    private function renderMissingEntries(
-        array $missing,
-        bool $hasDrift,
-    ): bool {
-        if (empty($missing)) {
-            return $hasDrift;
-        }
-
-        $this->warn(
-            'Missing migration records '
-            . '(file exists but not in DB):'
-        );
-
-        if (count($missing) > self::TABLE_DISPLAY_THRESHOLD) {
-            table(
-                headers: ['Migration'],
-                rows: array_values(array_map(
-                    static fn (string $n): array => [$n],
-                    $missing,
-                )),
-            );
-        } else {
-            foreach ($missing as $name) {
-                $this->line("  <fg=yellow>? {$name}</>");
-            }
-        }
-
-        return true;
     }
 
     /**
