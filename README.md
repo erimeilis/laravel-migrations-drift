@@ -44,7 +44,7 @@
 - :art: **Interactive Prompts** — Beautiful multi-select, confirmations, and spinners via `laravel/prompts`
 - :electric_plug: **Multi-Connection** — Works with any database connection, not just the default
 - :zap: **CI-Ready** — Non-interactive mode with JSON output for automated pipelines
-- :test_tube: **225 Tests** — Comprehensive test suite with PHPStan level 6 static analysis
+- :test_tube: **230 Tests** — Comprehensive test suite with PHPStan level 6 static analysis
 
 ---
 
@@ -411,7 +411,7 @@ migrations:fix --force
 ## :test_tube: Testing
 
 ```bash
-# Run the full test suite (225 tests, 491 assertions)
+# Run the full test suite (230 tests, 497 assertions)
 vendor/bin/phpunit
 
 # Static analysis (PHPStan level 6 with Larastan)

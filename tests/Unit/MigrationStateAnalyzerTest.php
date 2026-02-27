@@ -175,7 +175,7 @@ class MigrationStateAnalyzerTest extends TestCase
         $this->assertNull($result);
     }
 
-    public function test_is_applied_to_schema_alter_no_columns_returns_null(): void
+    public function test_is_applied_to_schema_alter_no_evidence_returns_null(): void
     {
         $def = $this->makeDefinition(
             tableName: 'users',
@@ -188,6 +188,149 @@ class MigrationStateAnalyzerTest extends TestCase
 
         $result = $this->analyzer->isAppliedToSchema($def, $schema);
         $this->assertNull($result);
+    }
+
+    public function test_is_applied_to_schema_alter_fk_present(): void
+    {
+        $def = $this->makeDefinition(
+            tableName: 'backorders',
+            operationType: 'alter',
+            upForeignKeys: [
+                ['column' => 'user_id', 'references' => 'id', 'on' => 'users'],
+            ],
+        );
+
+        $schema = $this->makeSchema(
+            tables: ['backorders', 'users'],
+            foreignKeys: [
+                'backorders' => [
+                    [
+                        'name' => 'backorders_user_id_foreign',
+                        'columns' => ['user_id'],
+                        'foreign_schema' => '',
+                        'foreign_table' => 'users',
+                        'foreign_columns' => ['id'],
+                        'on_update' => 'no action',
+                        'on_delete' => 'cascade',
+                    ],
+                ],
+            ],
+        );
+
+        $result = $this->analyzer->isAppliedToSchema($def, $schema);
+        $this->assertTrue($result);
+    }
+
+    public function test_is_applied_to_schema_alter_fk_missing(): void
+    {
+        $def = $this->makeDefinition(
+            tableName: 'backorders',
+            operationType: 'alter',
+            upForeignKeys: [
+                ['column' => 'user_id', 'references' => 'id', 'on' => 'users'],
+            ],
+        );
+
+        $schema = $this->makeSchema(
+            tables: ['backorders', 'users'],
+            foreignKeys: [
+                'backorders' => [], // no FKs
+            ],
+        );
+
+        $result = $this->analyzer->isAppliedToSchema($def, $schema);
+        $this->assertFalse($result);
+    }
+
+    public function test_is_applied_to_schema_alter_index_present(): void
+    {
+        $def = $this->makeDefinition(
+            tableName: 'users',
+            operationType: 'alter',
+            upIndexes: [
+                ['type' => 'index', 'columns' => ['email']],
+            ],
+        );
+
+        $schema = $this->makeSchema(
+            tables: ['users'],
+            indexes: [
+                'users' => [
+                    [
+                        'name' => 'users_email_index',
+                        'columns' => ['email'],
+                        'type' => 'btree',
+                        'unique' => false,
+                        'primary' => false,
+                    ],
+                ],
+            ],
+        );
+
+        $result = $this->analyzer->isAppliedToSchema($def, $schema);
+        $this->assertTrue($result);
+    }
+
+    public function test_is_applied_to_schema_alter_index_missing(): void
+    {
+        $def = $this->makeDefinition(
+            tableName: 'users',
+            operationType: 'alter',
+            upIndexes: [
+                ['type' => 'index', 'columns' => ['email']],
+            ],
+        );
+
+        $schema = $this->makeSchema(
+            tables: ['users'],
+            indexes: [
+                'users' => [], // no indexes
+            ],
+        );
+
+        $result = $this->analyzer->isAppliedToSchema($def, $schema);
+        $this->assertFalse($result);
+    }
+
+    public function test_is_applied_to_schema_alter_fk_only_no_columns_detected_as_applied(): void
+    {
+        // This is the exact scenario: migration adds FK, no columns,
+        // schema already has the FK from a backup restore
+        $this->setupMocksForAnalyze(
+            fileNames: ['2026_01_01_000001_add_foreign_keys_to_backorders_table'],
+            dbRecords: [],
+            tables: ['backorders', 'users'],
+            foreignKeys: [
+                'backorders' => [
+                    [
+                        'name' => 'backorders_user_id_foreign',
+                        'columns' => ['user_id'],
+                        'foreign_schema' => '',
+                        'foreign_table' => 'users',
+                        'foreign_columns' => ['id'],
+                        'on_update' => 'no action',
+                        'on_delete' => 'cascade',
+                    ],
+                ],
+            ],
+        );
+
+        $def = $this->makeDefinition(
+            filename: '2026_01_01_000001_add_foreign_keys_to_backorders_table',
+            tableName: 'backorders',
+            operationType: 'alter',
+            upForeignKeys: [
+                ['column' => 'user_id', 'references' => 'id', 'on' => 'users'],
+            ],
+        );
+
+        $this->parser->method('parse')->willReturn($def);
+
+        $states = $this->analyzer->analyze('/path', $this->currentSchema);
+
+        $this->assertCount(1, $states);
+        // Should be LOST_RECORD (schema present, no DB record), not NEW_MIGRATION
+        $this->assertSame(MigrationStatus::LOST_RECORD, $states[0]->status);
     }
 
     public function test_classify_ok_record_and_file_with_schema(): void
@@ -435,13 +578,20 @@ class MigrationStateAnalyzerTest extends TestCase
         array $dbRecords,
         array $tables = [],
         array $columns = [],
+        array $indexes = [],
+        array $foreignKeys = [],
     ): void {
         $this->diffService->method('getMigrationFilenames')
             ->willReturn($fileNames);
         $this->diffService->method('getMigrationRecords')
             ->willReturn($dbRecords);
 
-        $this->currentSchema = $this->makeSchema($tables, $columns);
+        $this->currentSchema = $this->makeSchema(
+            $tables,
+            $columns,
+            $indexes,
+            $foreignKeys,
+        );
     }
 
     /**
@@ -470,6 +620,8 @@ class MigrationStateAnalyzerTest extends TestCase
         ?string $tableName = null,
         string $operationType = 'unknown',
         array $upColumns = [],
+        array $upIndexes = [],
+        array $upForeignKeys = [],
         bool $hasDataManipulation = false,
         bool $hasConditionalLogic = false,
     ): MigrationDefinition {
@@ -480,8 +632,8 @@ class MigrationStateAnalyzerTest extends TestCase
             operationType: $operationType,
             upColumns: $upColumns,
             upColumnTypes: [],
-            upIndexes: [],
-            upForeignKeys: [],
+            upIndexes: $upIndexes,
+            upForeignKeys: $upForeignKeys,
             hasDown: true,
             downIsEmpty: false,
             downOperations: [],

@@ -142,19 +142,55 @@ class MigrationStateAnalyzer
             return false;
         }
 
-        // If no parseable columns, can't determine
-        if (empty($def->upColumns)) {
+        $hasCheckableEvidence = !empty($def->upColumns)
+            || !empty($def->upIndexes)
+            || !empty($def->upForeignKeys);
+
+        if (!$hasCheckableEvidence) {
             return null;
         }
 
-        $schemaColumns = $this->extractColumnNames(
-            $actualSchema['columns'][$tableName] ?? [],
-        );
+        // Check columns — ALL added columns must be present
+        if (!empty($def->upColumns)) {
+            $schemaColumns = $this->extractColumnNames(
+                $actualSchema['columns'][$tableName] ?? [],
+            );
 
-        // ALL added columns must be present
-        foreach ($def->upColumns as $column) {
-            if (!in_array($column, $schemaColumns, true)) {
-                return false;
+            foreach ($def->upColumns as $column) {
+                if (!in_array($column, $schemaColumns, true)) {
+                    return false;
+                }
+            }
+        }
+
+        // Check indexes — ALL added indexes must be present
+        if (!empty($def->upIndexes)) {
+            $schemaIndexColumns = $this->extractIndexColumnSets(
+                $actualSchema['indexes'][$tableName] ?? [],
+            );
+
+            foreach ($def->upIndexes as $index) {
+                $indexCols = $index['columns'];
+                if (!empty($indexCols) && !$this->indexExistsInSchema(
+                    $indexCols,
+                    $schemaIndexColumns,
+                )) {
+                    return false;
+                }
+            }
+        }
+
+        // Check foreign keys — ALL added FKs must be present
+        if (!empty($def->upForeignKeys)) {
+            $schemaFks = $actualSchema['foreign_keys'][$tableName] ?? [];
+
+            foreach ($def->upForeignKeys as $fk) {
+                if (!$this->foreignKeyExistsInSchema(
+                    $fk,
+                    $schemaFks,
+                )) {
+                    return false;
+                }
             }
         }
 
@@ -388,5 +424,88 @@ class MigrationStateAnalyzer
             fn (array $col): string => (string) ($col['name'] ?? ''),
             $columns,
         );
+    }
+
+    /**
+     * Extract column sets from schema indexes for comparison.
+     *
+     * @param array<int, array<string, mixed>> $indexes
+     * @return array<int, string[]>
+     */
+    private function extractIndexColumnSets(array $indexes): array
+    {
+        return array_map(
+            static fn (array $idx): array => $idx['columns'] ?? [],
+            $indexes,
+        );
+    }
+
+    /**
+     * Check if an index (by its column set) exists in the schema.
+     *
+     * @param string[] $indexColumns
+     * @param array<int, string[]> $schemaIndexColumns
+     */
+    private function indexExistsInSchema(
+        array $indexColumns,
+        array $schemaIndexColumns,
+    ): bool {
+        sort($indexColumns);
+
+        foreach ($schemaIndexColumns as $schemaCols) {
+            $sorted = $schemaCols;
+            sort($sorted);
+
+            if ($indexColumns === $sorted) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Check if a foreign key exists in the schema.
+     *
+     * @param array{column: ?string, references: ?string, on: ?string} $fk
+     * @param array<int, array<string, mixed>> $schemaFks
+     */
+    private function foreignKeyExistsInSchema(
+        array $fk,
+        array $schemaFks,
+    ): bool {
+        $fkColumn = $fk['column'] ?? null;
+        $fkReferences = $fk['references'] ?? null;
+        $fkOn = $fk['on'] ?? null;
+
+        if ($fkColumn === null) {
+            return true; // Can't check — assume present
+        }
+
+        foreach ($schemaFks as $schemaFk) {
+            $schemaColumns = $schemaFk['columns'] ?? [];
+            $schemaTable = $schemaFk['foreign_table'] ?? null;
+            $schemaRefColumns = $schemaFk['foreign_columns'] ?? [];
+
+            if (!in_array($fkColumn, $schemaColumns, true)) {
+                continue;
+            }
+
+            // Column matches — check references if we have them
+            if ($fkOn !== null && $schemaTable !== $fkOn) {
+                continue;
+            }
+
+            if (
+                $fkReferences !== null
+                && !in_array($fkReferences, $schemaRefColumns, true)
+            ) {
+                continue;
+            }
+
+            return true;
+        }
+
+        return false;
     }
 }
