@@ -18,10 +18,14 @@ class SchemaComparator
      * Perform a full schema comparison by creating a temp DB,
      * running migrations on it, and diffing both schemas.
      *
+     * @param string $migrationPath Absolute path to the migrations directory
      * @param string[] $excludeFiles Migration filenames (without .php) to exclude from the temp DB run
      * @return array{missing_tables: string[], extra_tables: string[], column_diffs: array<string, array<string, mixed>>, index_diffs: array<string, array<string, mixed>>, fk_diffs: array<string, array<string, mixed>>, missing_table_details: array<string, array{columns: array<int, array<string, mixed>>, indexes: array<int, array<string, mixed>>, foreign_keys: array<int, array<string, mixed>>}>}
      */
-    public function compare(array $excludeFiles = []): array
+    public function compare(
+        string $migrationPath = '',
+        array $excludeFiles = [],
+    ): array
     {
         $defaultConnection = Config::get('database.default');
         $currentDb = Config::get(
@@ -60,10 +64,14 @@ class SchemaComparator
                 '--force' => true,
             ];
 
-            // If we need to exclude files, copy non-excluded
-            // migrations to a temp directory and use --path
-            if (!empty($excludeFiles)) {
+            // Determine which migration files to run on the
+            // temp DB. When excludeFiles is provided, copy
+            // non-excluded files to a temp dir. Otherwise use
+            // the resolved path directly so the temp DB matches
+            // exactly what the command is analyzing.
+            if (!empty($excludeFiles) && $migrationPath !== '') {
                 $filteredDir = $this->createFilteredMigrationDir(
+                    $migrationPath,
                     $excludeFiles,
                 );
 
@@ -71,6 +79,9 @@ class SchemaComparator
                     $migrateArgs['--path'] = $filteredDir;
                     $migrateArgs['--realpath'] = true;
                 }
+            } elseif ($migrationPath !== '') {
+                $migrateArgs['--path'] = $migrationPath;
+                $migrateArgs['--realpath'] = true;
             }
 
             Artisan::call('migrate', $migrateArgs);
@@ -145,13 +156,9 @@ class SchemaComparator
      * @param string[] $excludeFiles Filenames without .php extension
      */
     private function createFilteredMigrationDir(
+        string $migrationPath,
         array $excludeFiles,
     ): ?string {
-        $migrationPath = (string) config(
-            'migration-drift.migrations_path',
-            database_path('migrations'),
-        );
-
         if (!is_dir($migrationPath)) {
             return null;
         }

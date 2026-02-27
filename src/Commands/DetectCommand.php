@@ -197,7 +197,7 @@ class DetectCommand extends Command
         $warnings = [];
 
         try {
-            $schemaDiff = $schemaComparator->compare();
+            $schemaDiff = $schemaComparator->compare($path);
         } catch (\Throwable $e) {
             $warnings[] = 'Schema comparison failed: '
                 . $e->getMessage();

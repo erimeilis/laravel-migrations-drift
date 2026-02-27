@@ -273,7 +273,10 @@ class FixCommand extends Command
         array $excludeFiles = [],
     ): int {
         try {
-            $schemaDiff = $schemaComparator->compare($excludeFiles);
+            $schemaDiff = $schemaComparator->compare(
+                $path,
+                $excludeFiles,
+            );
         } catch (\Throwable $e) {
             $this->warn(
                 'Schema comparison skipped: '
