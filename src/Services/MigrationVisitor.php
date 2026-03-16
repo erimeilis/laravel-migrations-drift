@@ -532,10 +532,7 @@ class MigrationVisitor extends NodeVisitorAbstract
         if ($arg->value instanceof Node\Expr\Array_) {
             $columns = [];
             foreach ($arg->value->items as $item) {
-                if (
-                    $item instanceof Node\ArrayItem
-                    && $item->value instanceof Node\Scalar\String_
-                ) {
+                if ($item->value instanceof Node\Scalar\String_) {
                     $columns[] = $item->value->value;
                 }
             }
