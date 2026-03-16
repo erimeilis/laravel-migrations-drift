@@ -55,6 +55,17 @@ class MigrationVisitor extends NodeVisitorAbstract
 
     private bool $inDownMethod = false;
 
+    private ?string $currentSchemaTable = null;
+
+    /** @var array<string, string[]> */
+    private array $upColumnsByTable = [];
+
+    /** @var array<string, array<int, array{type: string, columns: string[]}>> */
+    private array $upIndexesByTable = [];
+
+    /** @var array<string, array<int, array{column: ?string, references: ?string, on: ?string}>> */
+    private array $upForeignKeysByTable = [];
+
     public function enterNode(Node $node): ?int
     {
         // Detect up() and down() methods
@@ -140,6 +151,13 @@ class MigrationVisitor extends NodeVisitorAbstract
             }
         }
 
+        if (
+            $node instanceof Node\Expr\StaticCall
+            && $this->isSchemaFacadeCall($node)
+        ) {
+            $this->currentSchemaTable = null;
+        }
+
         if ($node instanceof Node\Stmt\ClassMethod) {
             $name = $node->name->toString();
 
@@ -180,6 +198,9 @@ class MigrationVisitor extends NodeVisitorAbstract
             hasConditionalLogic: $this->hasConditionalLogic,
             isMultiTable: count($touchedTables) > 1,
             hasDataManipulation: $this->hasDataManipulation,
+            upColumnsByTable: $this->upColumnsByTable,
+            upIndexesByTable: $this->upIndexesByTable,
+            upForeignKeysByTable: $this->upForeignKeysByTable,
         );
     }
 
@@ -202,6 +223,10 @@ class MigrationVisitor extends NodeVisitorAbstract
 
         if ($tableName !== null) {
             $this->touchedTables[] = $tableName;
+        }
+
+        if ($this->inUpMethod && $tableName !== null) {
+            $this->currentSchemaTable = $tableName;
         }
 
         if (
@@ -277,6 +302,9 @@ class MigrationVisitor extends NodeVisitorAbstract
             if ($colName !== null) {
                 $this->upColumns[] = $colName;
                 $this->upColumnTypes[$colName] = $method;
+                if ($this->currentSchemaTable !== null) {
+                    $this->upColumnsByTable[$this->currentSchemaTable][] = $colName;
+                }
             } elseif (
                 in_array($method, [
                     'id', 'timestamps', 'timestampsTz',
@@ -298,10 +326,14 @@ class MigrationVisitor extends NodeVisitorAbstract
 
         if (in_array($method, $indexMethods, true)) {
             $columns = $this->extractStringOrArrayArg($node);
-            $this->upIndexes[] = [
+            $indexEntry = [
                 'type' => $method,
                 'columns' => $columns,
             ];
+            $this->upIndexes[] = $indexEntry;
+            if ($this->currentSchemaTable !== null) {
+                $this->upIndexesByTable[$this->currentSchemaTable][] = $indexEntry;
+            }
         }
 
         // rawIndex('expression', 'name') — parse columns from SQL expression
@@ -310,10 +342,14 @@ class MigrationVisitor extends NodeVisitorAbstract
             $columns = $expression !== null
                 ? $this->parseRawIndexColumns($expression)
                 : [];
-            $this->upIndexes[] = [
+            $indexEntry = [
                 'type' => 'index',
                 'columns' => $columns,
             ];
+            $this->upIndexes[] = $indexEntry;
+            if ($this->currentSchemaTable !== null) {
+                $this->upIndexesByTable[$this->currentSchemaTable][] = $indexEntry;
+            }
         }
 
         // Foreign key methods
@@ -321,11 +357,15 @@ class MigrationVisitor extends NodeVisitorAbstract
             $colName = $this->extractFirstStringArg(
                 $node,
             );
-            $this->upForeignKeys[] = [
+            $fkEntry = [
                 'column' => $colName,
                 'references' => null,
                 'on' => null,
             ];
+            $this->upForeignKeys[] = $fkEntry;
+            if ($this->currentSchemaTable !== null) {
+                $this->upForeignKeysByTable[$this->currentSchemaTable][] = $fkEntry;
+            }
         }
 
         // constrained() is a shorthand for
@@ -340,11 +380,15 @@ class MigrationVisitor extends NodeVisitorAbstract
             // upColumns entry as the FK column
             $fkColumn = !empty($this->upColumns)
                 ? end($this->upColumns) : null;
-            $this->upForeignKeys[] = [
+            $fkEntry = [
                 'column' => $fkColumn,
                 'references' => 'id',
                 'on' => $tableName,
             ];
+            $this->upForeignKeys[] = $fkEntry;
+            if ($this->currentSchemaTable !== null) {
+                $this->upForeignKeysByTable[$this->currentSchemaTable][] = $fkEntry;
+            }
         }
     }
 

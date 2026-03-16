@@ -142,6 +142,15 @@ class MigrationStateAnalyzer
             return false;
         }
 
+        // Use per-table evidence if available
+        $hasPerTableEvidence = !empty($def->upColumnsByTable)
+            || !empty($def->upIndexesByTable)
+            || !empty($def->upForeignKeysByTable);
+
+        if ($hasPerTableEvidence) {
+            return $this->isAlterAppliedMultiTable($def, $actualSchema);
+        }
+
         $hasCheckableEvidence = !empty($def->upColumns)
             || !empty($def->upIndexes)
             || !empty($def->upForeignKeys);
@@ -195,6 +204,86 @@ class MigrationStateAnalyzer
         }
 
         return true;
+    }
+
+    /**
+     * Check if a multi-table alter migration is applied by checking
+     * each table's evidence against that table's schema.
+     *
+     * @param array{tables: string[], columns: array<string, array<int, array<string, mixed>>>, indexes: array<string, array<int, array<string, mixed>>>, foreign_keys: array<string, array<int, array<string, mixed>>>} $actualSchema
+     */
+    private function isAlterAppliedMultiTable(
+        MigrationDefinition $def,
+        array $actualSchema,
+    ): ?bool {
+        $hasAnyEvidence = false;
+
+        foreach ($def->upColumnsByTable as $table => $columns) {
+            if (empty($columns)) {
+                continue;
+            }
+            $hasAnyEvidence = true;
+
+            if (!in_array($table, $actualSchema['tables'], true)) {
+                return false;
+            }
+
+            $schemaColumns = $this->extractColumnNames(
+                $actualSchema['columns'][$table] ?? [],
+            );
+
+            foreach ($columns as $column) {
+                if (!in_array($column, $schemaColumns, true)) {
+                    return false;
+                }
+            }
+        }
+
+        foreach ($def->upIndexesByTable as $table => $indexes) {
+            if (empty($indexes)) {
+                continue;
+            }
+            $hasAnyEvidence = true;
+
+            if (!in_array($table, $actualSchema['tables'], true)) {
+                return false;
+            }
+
+            $schemaIndexColumns = $this->extractIndexColumnSets(
+                $actualSchema['indexes'][$table] ?? [],
+            );
+
+            foreach ($indexes as $index) {
+                $indexCols = $index['columns'];
+                if (!empty($indexCols) && !$this->indexExistsInSchema(
+                    $indexCols,
+                    $schemaIndexColumns,
+                )) {
+                    return false;
+                }
+            }
+        }
+
+        foreach ($def->upForeignKeysByTable as $table => $fks) {
+            if (empty($fks)) {
+                continue;
+            }
+            $hasAnyEvidence = true;
+
+            if (!in_array($table, $actualSchema['tables'], true)) {
+                return false;
+            }
+
+            $schemaFks = $actualSchema['foreign_keys'][$table] ?? [];
+
+            foreach ($fks as $fk) {
+                if (!$this->foreignKeyExistsInSchema($fk, $schemaFks)) {
+                    return false;
+                }
+            }
+        }
+
+        return $hasAnyEvidence ? true : null;
     }
 
     /**

@@ -21,6 +21,9 @@ class MigrationDefinition
      * @param bool $hasConditionalLogic if/switch/match in up() or down()
      * @param bool $isMultiTable Touches more than one table
      * @param bool $hasDataManipulation Contains DB::table()->insert/update/delete, model calls, raw SQL
+     * @param array<string, string[]> $upColumnsByTable Columns grouped by table name
+     * @param array<string, array<int, array{type: string, columns: string[]}>> $upIndexesByTable Indexes grouped by table name
+     * @param array<string, array<int, array{column: ?string, references: ?string, on: ?string}>> $upForeignKeysByTable Foreign keys grouped by table name
      */
     public function __construct(
         public readonly string $filename,
@@ -37,5 +40,8 @@ class MigrationDefinition
         public readonly bool $hasConditionalLogic,
         public readonly bool $isMultiTable,
         public readonly bool $hasDataManipulation,
+        public readonly array $upColumnsByTable = [],
+        public readonly array $upIndexesByTable = [],
+        public readonly array $upForeignKeysByTable = [],
     ) {}
 }

@@ -210,4 +210,57 @@ class MigrationVisitorTest extends TestCase
 
         $this->assertTrue($def->hasConditionalLogic);
     }
+
+    public function test_multi_table_indexes_grouped_by_table(): void
+    {
+        $def = $this->parser->parse(
+            $this->fixturesPath
+            . '/migrations-broken-down/'
+            . '2026_01_01_000006_add_indexes_to_multiple_tables.php',
+        );
+
+        $this->assertTrue($def->isMultiTable);
+        $this->assertNotEmpty($def->upIndexesByTable);
+
+        $this->assertArrayHasKey('orders', $def->upIndexesByTable);
+        $ordersIndexCols = array_map(
+            fn (array $idx) => $idx['columns'],
+            $def->upIndexesByTable['orders'],
+        );
+        $this->assertContains(['paymentstatus'], $ordersIndexCols);
+
+        $this->assertArrayHasKey('products', $def->upIndexesByTable);
+        $productsIndexCols = array_map(
+            fn (array $idx) => $idx['columns'],
+            $def->upIndexesByTable['products'],
+        );
+        $this->assertContains(['sale_status'], $productsIndexCols);
+        $this->assertContains(['availability'], $productsIndexCols);
+
+        $this->assertArrayHasKey('customers', $def->upIndexesByTable);
+        $customersIndexCols = array_map(
+            fn (array $idx) => $idx['columns'],
+            $def->upIndexesByTable['customers'],
+        );
+        $this->assertContains(['accountmanager_id'], $customersIndexCols);
+    }
+
+    public function test_multi_table_columns_grouped_by_table(): void
+    {
+        $def = $this->parser->parse(
+            $this->fixturesPath
+            . '/migrations-broken-down/'
+            . '2026_01_01_000007_add_columns_to_multiple_tables.php',
+        );
+
+        $this->assertTrue($def->isMultiTable);
+        $this->assertNotEmpty($def->upColumnsByTable);
+
+        $this->assertArrayHasKey('orders', $def->upColumnsByTable);
+        $this->assertContains('payment_date', $def->upColumnsByTable['orders']);
+        $this->assertContains('type', $def->upColumnsByTable['orders']);
+
+        $this->assertArrayHasKey('products', $def->upColumnsByTable);
+        $this->assertContains('is_featured', $def->upColumnsByTable['products']);
+    }
 }

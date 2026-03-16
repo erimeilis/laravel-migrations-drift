@@ -615,20 +615,136 @@ class MigrationStateAnalyzerTest extends TestCase
         ];
     }
 
+    public function test_multi_table_alter_with_record_and_all_indexes_present_is_ok(): void
+    {
+        $this->setupMocksForAnalyze(
+            fileNames: ['2026_01_01_000001_add_indexes_to_multiple_tables'],
+            dbRecords: ['2026_01_01_000001_add_indexes_to_multiple_tables'],
+            tables: ['orders', 'products', 'customers'],
+            indexes: [
+                'orders' => [
+                    ['name' => 'idx1', 'columns' => ['paymentstatus'], 'type' => 'btree', 'unique' => false, 'primary' => false],
+                ],
+                'products' => [
+                    ['name' => 'idx2', 'columns' => ['sale_status'], 'type' => 'btree', 'unique' => false, 'primary' => false],
+                ],
+                'customers' => [
+                    ['name' => 'idx3', 'columns' => ['accountmanager_id'], 'type' => 'btree', 'unique' => false, 'primary' => false],
+                ],
+            ],
+        );
+
+        $def = $this->makeDefinition(
+            filename: '2026_01_01_000001_add_indexes_to_multiple_tables',
+            tableName: 'orders',
+            touchedTables: ['orders', 'products', 'customers'],
+            operationType: 'alter',
+            upIndexesByTable: [
+                'orders' => [['type' => 'index', 'columns' => ['paymentstatus']]],
+                'products' => [['type' => 'index', 'columns' => ['sale_status']]],
+                'customers' => [['type' => 'index', 'columns' => ['accountmanager_id']]],
+            ],
+            hasConditionalLogic: true,
+        );
+
+        $this->parser->method('parse')->willReturn($def);
+
+        $states = $this->analyzer->analyze('/path', $this->currentSchema);
+
+        $this->assertCount(1, $states);
+        $this->assertSame(MigrationStatus::OK, $states[0]->status);
+    }
+
+    public function test_multi_table_alter_with_record_and_missing_index_is_bogus(): void
+    {
+        $this->setupMocksForAnalyze(
+            fileNames: ['2026_01_01_000001_add_indexes_to_multiple_tables'],
+            dbRecords: ['2026_01_01_000001_add_indexes_to_multiple_tables'],
+            tables: ['orders', 'products', 'customers'],
+            indexes: [
+                'orders' => [
+                    ['name' => 'idx1', 'columns' => ['paymentstatus'], 'type' => 'btree', 'unique' => false, 'primary' => false],
+                ],
+                'products' => [],
+                'customers' => [
+                    ['name' => 'idx3', 'columns' => ['accountmanager_id'], 'type' => 'btree', 'unique' => false, 'primary' => false],
+                ],
+            ],
+        );
+
+        $def = $this->makeDefinition(
+            filename: '2026_01_01_000001_add_indexes_to_multiple_tables',
+            tableName: 'orders',
+            touchedTables: ['orders', 'products', 'customers'],
+            operationType: 'alter',
+            upIndexesByTable: [
+                'orders' => [['type' => 'index', 'columns' => ['paymentstatus']]],
+                'products' => [['type' => 'index', 'columns' => ['sale_status']]],
+                'customers' => [['type' => 'index', 'columns' => ['accountmanager_id']]],
+            ],
+        );
+
+        $this->parser->method('parse')->willReturn($def);
+
+        $states = $this->analyzer->analyze('/path', $this->currentSchema);
+
+        $this->assertCount(1, $states);
+        $this->assertSame(MigrationStatus::BOGUS_RECORD, $states[0]->status);
+    }
+
+    public function test_multi_table_alter_columns_by_table_all_present_is_ok(): void
+    {
+        $this->setupMocksForAnalyze(
+            fileNames: ['2026_01_01_000001_add_columns_multi'],
+            dbRecords: ['2026_01_01_000001_add_columns_multi'],
+            tables: ['orders', 'products'],
+            columns: [
+                'orders' => [['name' => 'id'], ['name' => 'payment_date'], ['name' => 'type']],
+                'products' => [['name' => 'id'], ['name' => 'is_featured']],
+            ],
+        );
+
+        $def = $this->makeDefinition(
+            filename: '2026_01_01_000001_add_columns_multi',
+            tableName: 'orders',
+            touchedTables: ['orders', 'products'],
+            operationType: 'alter',
+            upColumnsByTable: [
+                'orders' => ['payment_date', 'type'],
+                'products' => ['is_featured'],
+            ],
+        );
+
+        $this->parser->method('parse')->willReturn($def);
+
+        $states = $this->analyzer->analyze('/path', $this->currentSchema);
+
+        $this->assertCount(1, $states);
+        $this->assertSame(MigrationStatus::OK, $states[0]->status);
+    }
+
     private function makeDefinition(
         string $filename = 'test_migration',
         ?string $tableName = null,
+        array $touchedTables = [],
         string $operationType = 'unknown',
         array $upColumns = [],
         array $upIndexes = [],
         array $upForeignKeys = [],
+        array $upColumnsByTable = [],
+        array $upIndexesByTable = [],
+        array $upForeignKeysByTable = [],
         bool $hasDataManipulation = false,
         bool $hasConditionalLogic = false,
     ): MigrationDefinition {
+        $resolvedTables = !empty($touchedTables)
+            ? $touchedTables
+            : ($tableName !== null ? [$tableName] : []);
+
         return new MigrationDefinition(
             filename: $filename,
             tableName: $tableName,
-            touchedTables: $tableName !== null ? [$tableName] : [],
+            touchedTables: $resolvedTables,
             operationType: $operationType,
             upColumns: $upColumns,
             upColumnTypes: [],
@@ -638,8 +754,11 @@ class MigrationStateAnalyzerTest extends TestCase
             downIsEmpty: false,
             downOperations: [],
             hasConditionalLogic: $hasConditionalLogic,
-            isMultiTable: false,
+            isMultiTable: count($resolvedTables) > 1,
             hasDataManipulation: $hasDataManipulation,
+            upColumnsByTable: $upColumnsByTable,
+            upIndexesByTable: $upIndexesByTable,
+            upForeignKeysByTable: $upForeignKeysByTable,
         );
     }
 }
