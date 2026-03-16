@@ -297,13 +297,22 @@ class MigrationVisitor extends NodeVisitorAbstract
         ];
 
         if (in_array($method, $indexMethods, true)) {
-            $colName = $this->extractFirstStringArg(
-                $node,
-            );
+            $columns = $this->extractStringOrArrayArg($node);
             $this->upIndexes[] = [
                 'type' => $method,
-                'columns' => $colName !== null
-                    ? [$colName] : [],
+                'columns' => $columns,
+            ];
+        }
+
+        // rawIndex('expression', 'name') — parse columns from SQL expression
+        if ($method === 'rawIndex') {
+            $expression = $this->extractFirstStringArg($node);
+            $columns = $expression !== null
+                ? $this->parseRawIndexColumns($expression)
+                : [];
+            $this->upIndexes[] = [
+                'type' => 'index',
+                'columns' => $columns,
             ];
         }
 
@@ -494,6 +503,77 @@ class MigrationVisitor extends NodeVisitorAbstract
         }
 
         return null;
+    }
+
+    /**
+     * Extract a string or array of strings from the first argument.
+     *
+     * Handles: ->index('col'), ->index(['col1', 'col2'])
+     *
+     * @return string[]
+     */
+    private function extractStringOrArrayArg(
+        Node\Expr\MethodCall $node,
+    ): array {
+        if (!isset($node->args[0])) {
+            return [];
+        }
+
+        $arg = $node->args[0];
+
+        if (!$arg instanceof Node\Arg) {
+            return [];
+        }
+
+        if ($arg->value instanceof Node\Scalar\String_) {
+            return [$arg->value->value];
+        }
+
+        if ($arg->value instanceof Node\Expr\Array_) {
+            $columns = [];
+            foreach ($arg->value->items as $item) {
+                if (
+                    $item instanceof Node\ArrayItem
+                    && $item->value instanceof Node\Scalar\String_
+                ) {
+                    $columns[] = $item->value->value;
+                }
+            }
+
+            return $columns;
+        }
+
+        return [];
+    }
+
+    /**
+     * Parse column names from a raw SQL index expression.
+     *
+     * E.g. 'status, created_at DESC' → ['status', 'created_at']
+     *
+     * @return string[]
+     */
+    private function parseRawIndexColumns(string $expression): array
+    {
+        $columns = [];
+        $parts = explode(',', $expression);
+
+        foreach ($parts as $part) {
+            $part = trim($part);
+            // Strip SQL modifiers: ASC, DESC, NULLS FIRST, NULLS LAST
+            $part = (string) preg_replace(
+                '/\b(ASC|DESC|NULLS\s+FIRST|NULLS\s+LAST)\b/i',
+                '',
+                $part,
+            );
+            $col = trim($part);
+
+            if ($col !== '') {
+                $columns[] = $col;
+            }
+        }
+
+        return $columns;
     }
 
     private function isMethodEmpty(

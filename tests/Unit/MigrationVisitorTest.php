@@ -154,4 +154,60 @@ class MigrationVisitorTest extends TestCase
             $def->downOperations,
         );
     }
+
+    public function test_raw_index_columns_parsed(): void
+    {
+        $def = $this->parser->parse(
+            $this->fixturesPath
+            . '/migrations-broken-down/'
+            . '2026_01_01_000005_add_raw_and_array_indexes.php',
+        );
+
+        $this->assertNotEmpty($def->upIndexes);
+
+        // rawIndex('status, created_at DESC') → ['status', 'created_at']
+        $rawIndex = $def->upIndexes[0];
+        $this->assertSame('index', $rawIndex['type']);
+        $this->assertSame(
+            ['status', 'created_at'],
+            $rawIndex['columns'],
+        );
+    }
+
+    public function test_array_index_columns_parsed(): void
+    {
+        $def = $this->parser->parse(
+            $this->fixturesPath
+            . '/migrations-broken-down/'
+            . '2026_01_01_000005_add_raw_and_array_indexes.php',
+        );
+
+        // index(['email', 'name']) → ['email', 'name']
+        // Find the index that has 'email' — skip the rawIndex/conditional ones
+        $arrayIndex = null;
+        foreach ($def->upIndexes as $idx) {
+            if (in_array('email', $idx['columns'], true)) {
+                $arrayIndex = $idx;
+                break;
+            }
+        }
+
+        $this->assertNotNull($arrayIndex);
+        $this->assertSame('index', $arrayIndex['type']);
+        $this->assertSame(
+            ['email', 'name'],
+            $arrayIndex['columns'],
+        );
+    }
+
+    public function test_conditional_logic_detected_with_raw_index(): void
+    {
+        $def = $this->parser->parse(
+            $this->fixturesPath
+            . '/migrations-broken-down/'
+            . '2026_01_01_000005_add_raw_and_array_indexes.php',
+        );
+
+        $this->assertTrue($def->hasConditionalLogic);
+    }
 }
