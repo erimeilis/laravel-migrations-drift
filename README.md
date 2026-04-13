@@ -6,7 +6,7 @@
 [![Total Downloads](https://img.shields.io/packagist/dt/erimeilis/laravel-migrations-drift.svg?style=flat-square)](https://packagist.org/packages/erimeilis/laravel-migrations-drift)
 [![Tests](https://github.com/erimeilis/laravel-migrations-drift/actions/workflows/tests.yml/badge.svg)](https://github.com/erimeilis/laravel-migrations-drift/actions/workflows/tests.yml)
 [![PHP Version](https://img.shields.io/packagist/php-v/erimeilis/laravel-migrations-drift.svg?style=flat-square)](https://packagist.org/packages/erimeilis/laravel-migrations-drift)
-[![Laravel 11+](https://img.shields.io/badge/Laravel-11%20%7C%2012-FF2D20.svg?style=flat-square)](https://laravel.com)
+[![Laravel 11+](https://img.shields.io/badge/Laravel-11%20%7C%2012%20%7C%2013-FF2D20.svg?style=flat-square)](https://laravel.com)
 [![License: MIT](https://img.shields.io/packagist/l/erimeilis/laravel-migrations-drift.svg?style=flat-square)](https://opensource.org/licenses/MIT)
 
 > :mag: Detect every kind of schema drift — filenames, columns, indexes, foreign keys
@@ -44,7 +44,7 @@
 - :art: **Interactive Prompts** — Beautiful multi-select, confirmations, and spinners via `laravel/prompts`
 - :electric_plug: **Multi-Connection** — Works with any database connection, not just the default
 - :zap: **CI-Ready** — Non-interactive mode with JSON output for automated pipelines
-- :test_tube: **230 Tests** — Comprehensive test suite with PHPStan level 6 static analysis
+- :test_tube: **238 Tests** — Comprehensive test suite with PHPStan level 6 static analysis
 
 ---
 
@@ -62,7 +62,7 @@ php artisan vendor:publish --tag=migration-drift-config
 
 **Requirements:**
 - PHP 8.2 or higher
-- Laravel 11.x or 12.x
+- Laravel 11.x, 12.x, or 13.x
 - `CREATE DATABASE` permission for schema comparison (optional — gracefully skipped if unavailable)
 
 ---
@@ -411,7 +411,7 @@ migrations:fix --force
 ## :test_tube: Testing
 
 ```bash
-# Run the full test suite (230 tests, 497 assertions)
+# Run the full test suite (238 tests, 529 assertions)
 vendor/bin/phpunit
 
 # Static analysis (PHPStan level 6 with Larastan)
@@ -420,7 +420,7 @@ vendor/bin/phpstan analyse
 
 Tested across:
 - PHP 8.2, 8.3, 8.4, 8.5
-- Laravel 11.x, 12.x
+- Laravel 11.x, 12.x, 13.x
 
 ---
 
