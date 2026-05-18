@@ -390,10 +390,41 @@ class TypeMapper
         ];
 
         // Try type_name first, then type
-        return $map[$typeName]
-            ?? $map[$type]
-            ?? "addColumn('"
-            . addcslashes($type, "'\\") . "', '{$name}')";
+        $mapped = $map[$typeName] ?? $map[$type] ?? null;
+
+        if ($mapped !== null) {
+            return $mapped;
+        }
+
+        // Neither type nor type_name were resolvable. Refusing to silently
+        // emit `addColumn('', '<name>')` — when the introspected column
+        // info is missing type information, the generated migration is
+        // unrunnable (the resulting Blueprint column has an empty `type`
+        // property and the underlying grammar crashes with
+        // `Method ... ::type does not exist`). Fail loudly here with the
+        // full column context so the operator can fix the upstream
+        // schema-diff input instead of debugging a stack trace deep in
+        // Tpetry/Laravel grammar code.
+        if ($type === '' && $typeName === '') {
+            throw new \RuntimeException(sprintf(
+                'TypeMapper::mapType: cannot resolve a Blueprint method for'
+                . ' column "%s" — both `type` and `type_name` are empty.'
+                . ' This usually means the SchemaIntrospector or upstream'
+                . ' schema-diff service produced a column entry without'
+                . ' type information. Refusing to emit a broken'
+                . ' addColumn(\'\', \'%s\') call.',
+                $name,
+                $name,
+            ));
+        }
+
+        // Non-empty but unknown type — keep the addColumn fallback so the
+        // generated migration at least references the real underlying SQL
+        // type. The migrator will still surface an error if Blueprint
+        // can't handle it, but the diagnostic will name a real type.
+        return "addColumn('"
+            . addcslashes($type !== '' ? $type : $typeName, "'\\")
+            . "', '{$name}')";
     }
 
     /**

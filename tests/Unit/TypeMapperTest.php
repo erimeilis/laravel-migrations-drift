@@ -449,4 +449,32 @@ class TypeMapperTest extends TestCase
             $def,
         );
     }
+
+    public function test_empty_type_throws_runtime_exception(): void
+    {
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('event_uuid');
+
+        // Refuse to emit broken `addColumn('', 'event_uuid')` calls when
+        // the upstream schema-diff input is missing type information.
+        $this->mapper->toBlueprintMethod([
+            'name' => 'event_uuid',
+            'type' => '',
+            'type_name' => '',
+        ]);
+    }
+
+    public function test_unknown_non_empty_type_falls_back_to_add_column(): void
+    {
+        // Unknown SQL types must still produce parseable PHP — the
+        // resulting addColumn call carries the real type so the migrator
+        // failure (if any) names the actual underlying type.
+        $method = $this->mapper->toBlueprintMethod([
+            'name' => 'geo',
+            'type' => 'circle',
+            'type_name' => 'circle',
+        ]);
+
+        $this->assertSame("addColumn('circle', 'geo')", $method);
+    }
 }
