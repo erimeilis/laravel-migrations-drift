@@ -282,4 +282,47 @@ class SchemaIntrospectorTest extends TestCase
 
         $this->assertNotContains('migrations', $tables);
     }
+
+    public function test_get_tables_respects_literal_ignore_config(): void
+    {
+        config()->set(
+            'migration-drift.ignore_tables',
+            ['test_posts'],
+        );
+
+        $tables = $this->introspector->getTables('testing');
+
+        $this->assertContains('test_users', $tables);
+        $this->assertNotContains('test_posts', $tables);
+    }
+
+    public function test_get_tables_respects_regex_ignore_config(): void
+    {
+        config()->set(
+            'migration-drift.ignore_tables',
+            ['/^test_p/'],
+        );
+
+        $tables = $this->introspector->getTables('testing');
+
+        $this->assertContains('test_users', $tables);
+        $this->assertNotContains('test_posts', $tables);
+    }
+
+    public function test_get_ignored_tables_returns_reasons(): void
+    {
+        config()->set(
+            'migration-drift.ignore_tables',
+            ['test_posts'],
+        );
+
+        $ignored = $this->introspector
+            ->getIgnoredTables('testing');
+
+        $this->assertArrayHasKey('test_posts', $ignored);
+        $this->assertSame(
+            'config: literal',
+            $ignored['test_posts'],
+        );
+    }
 }

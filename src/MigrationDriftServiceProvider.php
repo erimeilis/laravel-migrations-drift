@@ -11,6 +11,7 @@ use EriMeilis\MigrationDrift\Services\BackupService;
 use EriMeilis\MigrationDrift\Services\CodeQualityAnalyzer;
 use EriMeilis\MigrationDrift\Services\ConsolidationService;
 use EriMeilis\MigrationDrift\Services\DependencyResolver;
+use EriMeilis\MigrationDrift\Services\IgnoredTableResolver;
 use EriMeilis\MigrationDrift\Services\MigrationDiffService;
 use EriMeilis\MigrationDrift\Services\MigrationGenerator;
 use EriMeilis\MigrationDrift\Services\MigrationParser;
@@ -31,7 +32,18 @@ class MigrationDriftServiceProvider extends ServiceProvider
         );
 
         $this->app->singleton(
+            IgnoredTableResolver::class,
+            fn ($app) => new IgnoredTableResolver(
+                $app->make('config'),
+                $app->make('db'),
+            ),
+        );
+
+        $this->app->singleton(
             SchemaIntrospector::class,
+            fn ($app) => new SchemaIntrospector(
+                $app->make(IgnoredTableResolver::class),
+            ),
         );
 
         $this->app->singleton(

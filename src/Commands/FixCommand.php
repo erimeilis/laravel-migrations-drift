@@ -306,12 +306,44 @@ class FixCommand extends Command
         }
 
         $this->displayActions($actions);
+        $this->displayIgnoredTables(
+            $introspector,
+            (string) config('database.default'),
+        );
 
         return $this->generateMigrations(
             $actions,
             $generator,
             $path,
         );
+    }
+
+    private function displayIgnoredTables(
+        SchemaIntrospector $introspector,
+        string $connection,
+    ): void {
+        $ignored = $introspector->getIgnoredTables($connection);
+
+        if (empty($ignored)) {
+            return;
+        }
+
+        $count = count($ignored);
+
+        $this->newLine();
+        $this->line(
+            "<fg=gray>Ignored {$count} table(s) "
+            . '(see config: migration-drift.ignore_tables):</>'
+        );
+
+        ksort($ignored);
+
+        foreach ($ignored as $name => $reason) {
+            $this->line(
+                "  <fg=gray>· {$name}</>"
+                . " <fg=gray>({$reason})</>",
+            );
+        }
     }
 
     /**

@@ -12,6 +12,7 @@ use EriMeilis\MigrationDrift\Services\MigrationState;
 use EriMeilis\MigrationDrift\Services\MigrationStateAnalyzer;
 use EriMeilis\MigrationDrift\Services\MigrationStatus;
 use EriMeilis\MigrationDrift\Services\SchemaComparator;
+use EriMeilis\MigrationDrift\Services\SchemaIntrospector;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\DB;
 
@@ -39,6 +40,7 @@ class DetectCommand extends Command
         SchemaComparator $schemaComparator,
         MigrationParser $parser,
         CodeQualityAnalyzer $qualityAnalyzer,
+        SchemaIntrospector $introspector,
     ): int {
         $connection = $this->selectConnection();
         $originalConnection = (string) config('database.default');
@@ -152,6 +154,11 @@ class DetectCommand extends Command
                 $schemaDiff,
                 $schemaComparator,
                 $hasDrift,
+            );
+
+            $this->renderIgnoredTables(
+                $introspector,
+                $connection,
             );
 
             $this->renderQualityIssues($qualityIssues);
@@ -408,6 +415,34 @@ class DetectCommand extends Command
         $this->renderForeignKeyDiffs($schemaDiff);
 
         return true;
+    }
+
+    private function renderIgnoredTables(
+        SchemaIntrospector $introspector,
+        string $connection,
+    ): void {
+        $ignored = $introspector->getIgnoredTables($connection);
+
+        if (empty($ignored)) {
+            return;
+        }
+
+        $count = count($ignored);
+
+        $this->newLine();
+        $this->line(
+            "<fg=gray>Ignored {$count} table(s)"
+            . ' (not analyzed for drift):</>'
+        );
+
+        ksort($ignored);
+
+        foreach ($ignored as $name => $reason) {
+            $this->line(
+                "  <fg=gray>· {$name}</>"
+                . " <fg=gray>({$reason})</>",
+            );
+        }
     }
 
     /**

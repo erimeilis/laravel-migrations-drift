@@ -121,6 +121,39 @@ class DetectCommandTest extends TestCase
             ->assertSuccessful();
     }
 
+    public function test_ignored_table_appears_in_command_output(): void
+    {
+        // Simulate a runtime-created table (e.g. partition child,
+        // sharded data table) by creating it directly in the DB.
+        // With the ignore config it must surface in the
+        // "Ignored N table(s)" section so the user can audit.
+        DB::statement(
+            'CREATE TABLE events_2024_01'
+            . ' (id INTEGER PRIMARY KEY)'
+        );
+
+        config()->set(
+            'migration-drift.ignore_tables',
+            ['/^events_\d{4}_\d{2}$/'],
+        );
+
+        Artisan::call('migrations:detect');
+        $output = Artisan::output();
+
+        $this->assertStringContainsString(
+            'Ignored 1 table(s)',
+            $output,
+        );
+        $this->assertStringContainsString(
+            'events_2024_01',
+            $output,
+        );
+        $this->assertStringContainsString(
+            'events_\d{4}_\d{2}',
+            $output,
+        );
+    }
+
     public function test_no_migration_files_shows_info(): void
     {
         $emptyDir = \dirname(__DIR__, 2)
