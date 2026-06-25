@@ -4,6 +4,17 @@ All notable changes to `laravel-migrations-drift` are documented here.
 This project adheres to [Semantic Versioning](https://semver.org).
 Releases prior to `0.4.1` are recorded as Git tags only.
 
+## [0.4.2] - 2026-06-25
+
+### Removed
+
+- **Dropped Laravel 11 support.** Laravel 11 reached end of security support on
+  2026-03-12, so Composer 2.9's advisory blocking refuses to install any 11.x
+  release (no further security patches will ship). Supported framework versions
+  are now Laravel 12 and 13. `illuminate/*` constraints are `^12.0|^13.0` and the
+  CI matrix tests Laravel 12 and 13 only. Projects still on Laravel 11 should
+  pin `erimeilis/laravel-migrations-drift:^0.4.1`.
+
 ## [0.4.1] - 2026-06-25
 
 ### Fixed
