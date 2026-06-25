@@ -6,7 +6,7 @@
 [![Total Downloads](https://img.shields.io/packagist/dt/erimeilis/laravel-migrations-drift.svg?style=flat-square)](https://packagist.org/packages/erimeilis/laravel-migrations-drift)
 [![Tests](https://github.com/erimeilis/laravel-migrations-drift/actions/workflows/tests.yml/badge.svg)](https://github.com/erimeilis/laravel-migrations-drift/actions/workflows/tests.yml)
 [![PHP Version](https://img.shields.io/packagist/php-v/erimeilis/laravel-migrations-drift.svg?style=flat-square)](https://packagist.org/packages/erimeilis/laravel-migrations-drift)
-[![Laravel 11+](https://img.shields.io/badge/Laravel-11%20%7C%2012%20%7C%2013-FF2D20.svg?style=flat-square)](https://laravel.com)
+[![Laravel 12+](https://img.shields.io/badge/Laravel-12%20%7C%2013-FF2D20.svg?style=flat-square)](https://laravel.com)
 [![License: MIT](https://img.shields.io/packagist/l/erimeilis/laravel-migrations-drift.svg?style=flat-square)](https://opensource.org/licenses/MIT)
 
 > :mag: Detect every kind of schema drift — filenames, columns, indexes, foreign keys
