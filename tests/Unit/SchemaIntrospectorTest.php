@@ -325,4 +325,65 @@ class SchemaIntrospectorTest extends TestCase
             $ignored['test_posts'],
         );
     }
+
+    public function test_canonical_name_strips_default_schema(): void
+    {
+        $this->assertSame(
+            'users',
+            $this->introspector->canonicalName('public', 'users', 'public'),
+        );
+        $this->assertSame(
+            'users',
+            $this->introspector->canonicalName(null, 'users', 'public'),
+        );
+        $this->assertSame(
+            'thing',
+            $this->introspector->canonicalName('main', 'thing', 'main'),
+        );
+    }
+
+    public function test_canonical_name_qualifies_non_default_schema(): void
+    {
+        $this->assertSame(
+            'agency.principals',
+            $this->introspector->canonicalName('agency', 'principals', 'public'),
+        );
+        $this->assertSame(
+            'agency.principals',
+            $this->introspector->canonicalName('agency', 'principals', null),
+        );
+    }
+
+    public function test_get_tables_qualifies_tables_in_non_default_schema(): void
+    {
+        $conn = \Illuminate\Support\Facades\DB::connection('testing');
+        $conn->statement("ATTACH DATABASE ':memory:' AS agency");
+        $conn->statement(
+            'CREATE TABLE agency.principals (id integer primary key, code varchar)',
+        );
+
+        $tables = $this->introspector->getTables('testing');
+
+        // Non-default schema → schema-qualified, matching the
+        // "agency.principals" a migration's Schema::create() declares.
+        $this->assertContains('agency.principals', $tables);
+        // Bare "principals" would be the pre-fix (broken) result.
+        $this->assertNotContains('principals', $tables);
+        // Default-schema tables stay bare (no regression).
+        $this->assertContains('test_users', $tables);
+    }
+
+    public function test_full_schema_keys_non_default_schema_tables_qualified(): void
+    {
+        $conn = \Illuminate\Support\Facades\DB::connection('testing');
+        $conn->statement("ATTACH DATABASE ':memory:' AS agency");
+        $conn->statement(
+            'CREATE TABLE agency.principals (id integer primary key, code varchar)',
+        );
+
+        $schema = $this->introspector->getFullSchema('testing');
+
+        $this->assertContains('agency.principals', $schema['tables']);
+        $this->assertArrayHasKey('agency.principals', $schema['columns']);
+    }
 }

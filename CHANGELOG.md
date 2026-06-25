@@ -1,0 +1,33 @@
+# Changelog
+
+All notable changes to `laravel-migrations-drift` are documented here.
+This project adheres to [Semantic Versioning](https://semver.org).
+Releases prior to `0.4.1` are recorded as Git tags only.
+
+## [0.4.1] - 2026-06-25
+
+### Fixed
+
+- **Schema-qualified table matching.** Tables in a non-default database schema
+  (e.g. Postgres `agency.principals`) are now introspected by their
+  schema-qualified name, matching what migrations declare in
+  `Schema::create('agency.principals', …)`. Previously the schema was discarded
+  (`getTables()` was reduced with `->pluck('name')` to a bare `principals`), so
+  such a table never matched its create migration. The chain of failures that
+  caused:
+  - the create migration was misclassified as a **bogus record** and its
+    migration record was deleted even though the table existed;
+  - the now-untracked table was then seen as **extra**, generating a spurious
+    `drop_<table>_table` corrective migration (which itself targeted the bare,
+    wrong-schema name and was a silent no-op);
+  - the next `php artisan migrate` re-ran the "pending" create against the
+    still-present table, failing with
+    `SQLSTATE[42P07]: relation "…" already exists` — crash-looping any
+    auto-migrating container.
+- Foreign keys that reference a table in a non-default schema are canonicalized
+  the same way, so cross-schema references (e.g. `orders.principal_id` →
+  `agency.principals`) compare correctly.
+
+Tables in the connection's default schema (`public` on Postgres, `main` on
+SQLite) are unchanged — they stay bare, so existing single-schema projects are
+unaffected.
