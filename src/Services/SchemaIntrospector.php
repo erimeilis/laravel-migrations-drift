@@ -57,11 +57,18 @@ class SchemaIntrospector
      */
     private function getRawTables(string $connection): array
     {
-        $schema = Schema::connection($connection);
+        $builder = Schema::connection($connection);
         $migrationsTable = $this->getMigrationsTable();
+        $default = $this->defaultSchema($connection);
 
-        return collect($schema->getTables())
-            ->pluck('name')
+        return collect($builder->getTables())
+            ->map(
+                fn (array $table): string => $this->canonicalName(
+                    $table['schema'] ?? null,
+                    (string) $table['name'],
+                    $default,
+                ),
+            )
             ->reject(
                 fn (string $name): bool
                     => $name === $migrationsTable,
@@ -70,6 +77,40 @@ class SchemaIntrospector
             ->sort()
             ->values()
             ->all();
+    }
+
+    /**
+     * Canonicalize a table identifier so it matches what migration
+     * authors write in Schema::create(): tables in the connection's
+     * default schema stay bare ("users"); tables in any other schema
+     * are qualified ("agency.principals").
+     *
+     * Without this, a table in a non-default Postgres schema is
+     * introspected as the bare "name" and never matches the
+     * "agency.principals" the migration declares — so the create is
+     * misread as unapplied, its record is wiped as a bogus record, and
+     * a spurious drop migration is generated.
+     */
+    public function canonicalName(
+        ?string $schema,
+        string $name,
+        ?string $defaultSchema,
+    ): string {
+        if ($schema === null || $schema === $defaultSchema) {
+            return $name;
+        }
+
+        return $schema . '.' . $name;
+    }
+
+    /**
+     * The connection's default (current) schema — "public" on a stock
+     * Postgres search_path, "main" on SQLite. Used to decide which
+     * tables stay bare during canonicalization.
+     */
+    private function defaultSchema(string $connection): ?string
+    {
+        return Schema::connection($connection)->getCurrentSchemaName();
     }
 
     private function resolver(): IgnoredTableResolver
@@ -112,8 +153,20 @@ class SchemaIntrospector
         string $connection,
         string $table,
     ): array {
-        return Schema::connection($connection)
-            ->getForeignKeys($table);
+        $default = $this->defaultSchema($connection);
+
+        return array_map(
+            function (array $fk) use ($default): array {
+                $fk['foreign_table'] = $this->canonicalName(
+                    $fk['foreign_schema'] ?? null,
+                    (string) $fk['foreign_table'],
+                    $default,
+                );
+
+                return $fk;
+            },
+            Schema::connection($connection)->getForeignKeys($table),
+        );
     }
 
     /**

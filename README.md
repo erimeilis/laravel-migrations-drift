@@ -23,6 +23,7 @@
 - :white_check_mark: **6-State Classification** — Every migration is classified as OK, Bogus Record, Missing File, Orphan Record, Lost Record, or New Migration
 - :file_cabinet: **Schema Verification** — Checks actual DB schema to determine if migrations truly ran, not just if records exist
 - :microscope: **Code Quality** — AST-parses migrations to detect missing `down()` methods, empty migrations, and more
+- :card_index_dividers: **Multi-Schema Aware** — Tables in non-default database schemas (e.g. Postgres `agency.principals`) are tracked by their schema-qualified name, exactly as your migrations declare them
 - :bar_chart: **JSON Output** — Machine-readable output for CI pipelines with exit code `0`/`1`
 
 ### :wrench: Unified Fix Command
