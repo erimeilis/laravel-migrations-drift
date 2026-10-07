@@ -477,4 +477,111 @@ class TypeMapperTest extends TestCase
 
         $this->assertSame("addColumn('circle', 'geo')", $method);
     }
+
+    public function test_type_with_args_applies_string_length(): void
+    {
+        $this->assertSame(
+            ['type' => 'varchar(32)', 'type_name' => 'varchar'],
+            $this->mapper->typeWithArgs('string', [32]),
+        );
+    }
+
+    public function test_type_with_args_applies_char_length(): void
+    {
+        $this->assertSame(
+            ['type' => 'char(10)', 'type_name' => 'char'],
+            $this->mapper->typeWithArgs('char', [10]),
+        );
+    }
+
+    public function test_type_with_args_applies_decimal_precision_and_scale(): void
+    {
+        $this->assertSame(
+            ['type' => 'decimal(12,4)', 'type_name' => 'decimal'],
+            $this->mapper->typeWithArgs('decimal', [12, 4]),
+        );
+    }
+
+    public function test_type_with_args_decimal_defaults_scale(): void
+    {
+        $this->assertSame(
+            ['type' => 'decimal(10,2)', 'type_name' => 'decimal'],
+            $this->mapper->typeWithArgs('decimal', [10]),
+        );
+    }
+
+    public function test_type_with_args_without_args_uses_default(): void
+    {
+        $this->assertSame(
+            $this->mapper->fromBlueprintMethod('string'),
+            $this->mapper->typeWithArgs('string', []),
+        );
+    }
+
+    public function test_type_with_args_applies_single_float_precision(): void
+    {
+        $this->assertSame(
+            ['type' => 'float(24)', 'type_name' => 'float'],
+            $this->mapper->typeWithArgs('float', [24]),
+        );
+    }
+
+    public function test_single_precision_float_round_trips_to_blueprint(): void
+    {
+        $this->assertSame(
+            "float('ratio', 24)",
+            $this->mapper->toBlueprintMethod([
+                'name' => 'ratio',
+                'type' => 'float(24)',
+                'type_name' => 'float',
+            ]),
+        );
+    }
+
+    public function test_column_definition_renders_unsigned_modifier(): void
+    {
+        $line = $this->mapper->toColumnDefinition([
+            'name' => 'owner_id',
+            'type' => 'bigint',
+            'type_name' => 'bigint',
+            'unsigned' => true,
+        ]);
+
+        $this->assertStringContainsString('->unsigned()', $line);
+    }
+
+    public function test_type_with_args_applies_temporal_precision(): void
+    {
+        $this->assertSame(
+            ['type' => 'timestamp(6)', 'type_name' => 'timestamp'],
+            $this->mapper->typeWithArgs('timestamp', [6]),
+        );
+    }
+
+    public function test_temporal_precision_round_trips_to_blueprint(): void
+    {
+        $this->assertSame(
+            "timestamp('occurred_at', 6)",
+            $this->mapper->toBlueprintMethod([
+                'name' => 'occurred_at',
+                'type' => 'timestamp(6)',
+                'type_name' => 'timestamp',
+            ]),
+        );
+    }
+
+    public function test_column_definition_renders_raw_default(): void
+    {
+        $line = $this->mapper->toColumnDefinition([
+            'name' => 'created_at',
+            'type' => 'timestamp',
+            'type_name' => 'timestamp',
+            'default_raw' => 'CURRENT_TIMESTAMP',
+        ]);
+
+        $this->assertStringContainsString(
+            "->default(DB::raw('CURRENT_TIMESTAMP'))",
+            $line,
+        );
+    }
 }

@@ -45,7 +45,7 @@
 - :art: **Interactive Prompts** — Beautiful multi-select, confirmations, and spinners via `laravel/prompts`
 - :electric_plug: **Multi-Connection** — Works with any database connection, not just the default
 - :zap: **CI-Ready** — Non-interactive mode with JSON output for automated pipelines
-- :test_tube: **238 Tests** — Comprehensive test suite with PHPStan level 6 static analysis
+- :test_tube: **302 Tests** — Comprehensive test suite with PHPStan level 6 static analysis
 
 ---
 
@@ -63,7 +63,7 @@ php artisan vendor:publish --tag=migration-drift-config
 
 **Requirements:**
 - PHP 8.2 or higher
-- Laravel 11.x, 12.x, or 13.x
+- Laravel 12.x or 13.x
 - `CREATE DATABASE` permission for schema comparison (optional — gracefully skipped if unavailable)
 
 ---
@@ -201,7 +201,7 @@ php artisan migrations:fix --consolidate        # dry-run: shows candidates
 php artisan migrations:fix --consolidate --force # consolidate selected tables
 ```
 
-Handles column additions, drops, index changes, and foreign keys. Multi-table migrations are automatically skipped from consolidation to preserve safety.
+Handles column additions, drops, type changes (`->change()`), index changes, and foreign keys — preserving each column's type, length/precision, and `nullable` / `default` / `unsigned` modifiers when replaying a chain. Multi-table migrations are automatically skipped from consolidation to preserve safety.
 
 #### :recycle: Restore from Backup
 
@@ -404,7 +404,7 @@ migrations:fix --force
 - **Schema comparison** requires `CREATE DATABASE` permission (gracefully skipped on SQLite or restricted permissions)
 - **Consolidation** skips multi-table migrations to preserve safety
 - **Type normalization** covers common MySQL/PostgreSQL/SQLite types — exotic custom types may need manual review
-- **Column modifiers** (nullable, default) are detected in schema comparison but not fully replayed during consolidation
+- **Column modifiers** — `nullable`, `default` (including `DB::raw(...)` expressions), and `unsigned` are replayed during consolidation; less common modifiers (e.g. `useCurrent`, `comment`, generated/virtual columns) are not yet reproduced
 - **Partial analysis** — Migrations with raw SQL or conditional logic are flagged with warnings; schema checks cover only the parseable Blueprint parts
 
 ---
@@ -412,7 +412,7 @@ migrations:fix --force
 ## :test_tube: Testing
 
 ```bash
-# Run the full test suite (238 tests, 529 assertions)
+# Run the full test suite (302 tests, 649 assertions)
 vendor/bin/phpunit
 
 # Static analysis (PHPStan level 6 with Larastan)
@@ -421,7 +421,7 @@ vendor/bin/phpstan analyse
 
 Tested across:
 - PHP 8.2, 8.3, 8.4, 8.5
-- Laravel 11.x, 12.x, 13.x
+- Laravel 12.x, 13.x
 
 ---
 
