@@ -202,16 +202,39 @@ class ConsolidationService
                     $hasApproximatedTypes = true;
                 }
 
-                $typeInfo = $this->typeMapper
-                    ->fromBlueprintMethod(
-                        $blueprintMethod,
-                    );
-                $columns[$col] = [
-                    'name' => $col,
-                    'type' => $typeInfo['type'],
-                    'type_name' => $typeInfo['type_name'],
-                    'nullable' => false,
-                ];
+                $typeInfo = $this->typeMapper->typeWithArgs(
+                    $blueprintMethod,
+                    $def->upColumnArgs[$col] ?? [],
+                );
+                $modifiers = $def->upColumnModifiers[$col] ?? [];
+                $columns[$col] = $this->columnWithModifiers(
+                    $col,
+                    $typeInfo,
+                    $modifiers,
+                );
+                if (!empty($modifiers['default_approximated'])) {
+                    $hasApproximatedTypes = true;
+                }
+            }
+
+            // Apply ->change() alterations to the accumulated state. A
+            // ->change() fully redefines the column (type and modifiers),
+            // so a column created earlier in the chain and later changed
+            // ends up with its final definition in the consolidated file.
+            foreach ($def->upChangedColumns as $col => $blueprintMethod) {
+                $typeInfo = $this->typeMapper->typeWithArgs(
+                    $blueprintMethod,
+                    $def->upColumnArgs[$col] ?? [],
+                );
+                $modifiers = $def->upColumnModifiers[$col] ?? [];
+                $columns[$col] = $this->columnWithModifiers(
+                    $col,
+                    $typeInfo,
+                    $modifiers,
+                );
+                if (!empty($modifiers['default_approximated'])) {
+                    $hasApproximatedTypes = true;
+                }
             }
 
             // Process indexes from up()
@@ -288,6 +311,40 @@ class ConsolidationService
             'has_approximated_types'
                 => $hasApproximatedTypes,
         ];
+    }
+
+    /**
+     * Build a column-info array from a type and its captured modifiers.
+     *
+     * @param array{type: string, type_name: string} $typeInfo
+     * @param array<string, mixed> $modifiers
+     * @return array<string, mixed>
+     */
+    private function columnWithModifiers(
+        string $col,
+        array $typeInfo,
+        array $modifiers,
+    ): array {
+        $column = [
+            'name' => $col,
+            'type' => $typeInfo['type'],
+            'type_name' => $typeInfo['type_name'],
+            'nullable' => $modifiers['nullable'] ?? false,
+        ];
+
+        if (array_key_exists('default', $modifiers)) {
+            $column['default'] = $modifiers['default'];
+        }
+
+        if (array_key_exists('default_raw', $modifiers)) {
+            $column['default_raw'] = $modifiers['default_raw'];
+        }
+
+        if (!empty($modifiers['unsigned'])) {
+            $column['unsigned'] = true;
+        }
+
+        return $column;
     }
 
     /**

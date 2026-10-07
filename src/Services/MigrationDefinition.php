@@ -24,6 +24,10 @@ class MigrationDefinition
      * @param array<string, string[]> $upColumnsByTable Columns grouped by table name
      * @param array<string, array<int, array{type: string, columns: string[]}>> $upIndexesByTable Indexes grouped by table name
      * @param array<string, array<int, array{column: ?string, references: ?string, on: ?string}>> $upForeignKeysByTable Foreign keys grouped by table name
+     * @param array<string, string> $upChangedColumns Columns altered via ->change() in up(): column name → target Blueprint method
+     * @param array<string, array<string, string>> $upChangedColumnsByTable Changed columns grouped by table name
+     * @param array<string, array<int, int>> $upColumnArgs Column name → numeric type arguments (length / precision / scale) for added or changed columns
+     * @param array<string, array<string, mixed>> $upColumnModifiers Column name → modifier map (nullable, default, unsigned, default_approximated) for added or changed columns
      */
     public function __construct(
         public readonly string $filename,
@@ -43,5 +47,9 @@ class MigrationDefinition
         public readonly array $upColumnsByTable = [],
         public readonly array $upIndexesByTable = [],
         public readonly array $upForeignKeysByTable = [],
+        public readonly array $upChangedColumns = [],
+        public readonly array $upChangedColumnsByTable = [],
+        public readonly array $upColumnArgs = [],
+        public readonly array $upColumnModifiers = [],
     ) {}
 }

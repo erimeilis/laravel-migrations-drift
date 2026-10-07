@@ -736,6 +736,8 @@ class MigrationStateAnalyzerTest extends TestCase
         array $upForeignKeysByTable = [],
         bool $hasDataManipulation = false,
         bool $hasConditionalLogic = false,
+        array $upChangedColumns = [],
+        array $upChangedColumnsByTable = [],
     ): MigrationDefinition {
         $resolvedTables = !empty($touchedTables)
             ? $touchedTables
@@ -759,6 +761,564 @@ class MigrationStateAnalyzerTest extends TestCase
             upColumnsByTable: $upColumnsByTable,
             upIndexesByTable: $upIndexesByTable,
             upForeignKeysByTable: $upForeignKeysByTable,
+            upChangedColumns: $upChangedColumns,
+            upChangedColumnsByTable: $upChangedColumnsByTable,
+        );
+    }
+
+    public function test_is_applied_to_schema_changed_column_is_indeterminate(): void
+    {
+        // A ->change() can't be confirmed or refuted from the schema (type
+        // is driver-collapsed; length/nullability/etc. are opaque), so the
+        // result is indeterminate — never a confident applied/not-applied.
+        $def = $this->makeDefinition(
+            tableName: 'documents',
+            operationType: 'alter',
+            upChangedColumns: ['source_document_id' => 'text'],
+        );
+
+        $schema = $this->makeSchema(
+            tables: ['documents'],
+            columns: [
+                'documents' => [
+                    ['name' => 'id', 'type_name' => 'bigint'],
+                    ['name' => 'source_document_id', 'type_name' => 'varchar'],
+                ],
+            ],
+        );
+
+        $result = $this->analyzer->isAppliedToSchema($def, $schema);
+        $this->assertNull($result);
+    }
+
+    public function test_is_applied_to_schema_changed_column_type_match_is_indeterminate(): void
+    {
+        // Base type matches, but type_name can't prove the ->change() ran
+        // (it may have altered nullability/length/etc.) — so the result is
+        // indeterminate, never a confident "applied".
+        $def = $this->makeDefinition(
+            tableName: 'documents',
+            operationType: 'alter',
+            upChangedColumns: ['source_document_id' => 'text'],
+        );
+
+        $schema = $this->makeSchema(
+            tables: ['documents'],
+            columns: [
+                'documents' => [
+                    ['name' => 'id', 'type_name' => 'bigint'],
+                    ['name' => 'source_document_id', 'type_name' => 'text'],
+                ],
+            ],
+        );
+
+        $result = $this->analyzer->isAppliedToSchema($def, $schema);
+        $this->assertNull($result);
+    }
+
+    public function test_is_applied_to_schema_changed_column_present_table_is_indeterminate(): void
+    {
+        // Even when the changed column isn't in the snapshot, we don't
+        // claim "not applied" from a bookkeeping check — the table exists,
+        // so the change stays indeterminate and migrate decides.
+        $def = $this->makeDefinition(
+            tableName: 'documents',
+            operationType: 'alter',
+            upChangedColumns: ['source_document_id' => 'text'],
+        );
+
+        $schema = $this->makeSchema(
+            tables: ['documents'],
+            columns: [
+                'documents' => [
+                    ['name' => 'id', 'type_name' => 'bigint'],
+                ],
+            ],
+        );
+
+        $result = $this->analyzer->isAppliedToSchema($def, $schema);
+        $this->assertNull($result);
+    }
+
+    public function test_change_only_migration_with_stale_type_is_new_migration_not_lost_record(): void
+    {
+        // The production trap: a ->change()-only migration with a file but
+        // no DB record, whose target type has NOT yet been applied, must be
+        // left for `migrate` to run — NOT silently inserted as a lost record.
+        $this->setupMocksForAnalyze(
+            fileNames: ['2026_01_01_000001_widen_source_document_id_on_documents_table'],
+            dbRecords: [],
+            tables: ['documents'],
+            columns: [
+                'documents' => [
+                    ['name' => 'id', 'type_name' => 'bigint'],
+                    ['name' => 'source_document_id', 'type_name' => 'varchar'],
+                ],
+            ],
+        );
+
+        $def = $this->makeDefinition(
+            filename: '2026_01_01_000001_widen_source_document_id_on_documents_table',
+            tableName: 'documents',
+            operationType: 'alter',
+            upChangedColumns: ['source_document_id' => 'text'],
+        );
+
+        $this->parser->method('parse')->willReturn($def);
+
+        $states = $this->analyzer->analyze('/path', $this->currentSchema);
+
+        $this->assertCount(1, $states);
+        $this->assertSame(
+            MigrationStatus::NEW_MIGRATION,
+            $states[0]->status,
+        );
+    }
+
+    public function test_change_only_migration_with_matching_type_is_still_new_migration(): void
+    {
+        // Same migration, target base type already live. We can't confirm
+        // the ->change() actually ran (nullability/length/etc. are opaque),
+        // so it is left as NEW for migrate to re-run — a no-op if already
+        // applied — rather than recorded as a lost record and skipped.
+        $this->setupMocksForAnalyze(
+            fileNames: ['2026_01_01_000001_widen_source_document_id_on_documents_table'],
+            dbRecords: [],
+            tables: ['documents'],
+            columns: [
+                'documents' => [
+                    ['name' => 'id', 'type_name' => 'bigint'],
+                    ['name' => 'source_document_id', 'type_name' => 'text'],
+                ],
+            ],
+        );
+
+        $def = $this->makeDefinition(
+            filename: '2026_01_01_000001_widen_source_document_id_on_documents_table',
+            tableName: 'documents',
+            operationType: 'alter',
+            upChangedColumns: ['source_document_id' => 'text'],
+        );
+
+        $this->parser->method('parse')->willReturn($def);
+
+        $states = $this->analyzer->analyze('/path', $this->currentSchema);
+
+        $this->assertCount(1, $states);
+        $this->assertSame(
+            MigrationStatus::NEW_MIGRATION,
+            $states[0]->status,
+        );
+    }
+
+    public function test_multi_table_changed_column_is_indeterminate(): void
+    {
+        // Per-table ->change() data routes through the multi-table path;
+        // with the tables present, changed columns are indeterminate.
+        $def = $this->makeDefinition(
+            tableName: 'documents',
+            touchedTables: ['documents', 'invoices'],
+            operationType: 'alter',
+            upChangedColumnsByTable: [
+                'documents' => ['doc_ref' => 'text'],
+                'invoices' => ['inv_ref' => 'text'],
+            ],
+        );
+
+        $schema = $this->makeSchema(
+            tables: ['documents', 'invoices'],
+            columns: [
+                'documents' => [
+                    ['name' => 'doc_ref', 'type_name' => 'text'],
+                ],
+                'invoices' => [
+                    ['name' => 'inv_ref', 'type_name' => 'varchar'],
+                ],
+            ],
+        );
+
+        $result = $this->analyzer->isAppliedToSchema($def, $schema);
+        $this->assertNull($result);
+    }
+
+    public function test_multi_table_changed_column_missing_table_not_applied(): void
+    {
+        // If a touched table is absent entirely, the change definitely
+        // hasn't applied — that is the one hard signal we keep.
+        $def = $this->makeDefinition(
+            tableName: 'documents',
+            touchedTables: ['documents', 'invoices'],
+            operationType: 'alter',
+            upChangedColumnsByTable: [
+                'invoices' => ['inv_ref' => 'text'],
+            ],
+        );
+
+        $schema = $this->makeSchema(
+            tables: ['documents'], // invoices missing
+            columns: [],
+        );
+
+        $result = $this->analyzer->isAppliedToSchema($def, $schema);
+        $this->assertFalse($result);
+    }
+
+    public function test_recorded_change_postgres_native_type_not_flagged_as_drift(): void
+    {
+        // integer()->change() on PostgreSQL (live type_name 'int4') shares a
+        // logical type with Blueprint 'integer'. A recorded migration must
+        // NOT be flagged BOGUS_RECORD over that driver-spelling difference.
+        $this->setupMocksForAnalyze(
+            fileNames: ['2026_01_01_000001_change_qty_on_orders_table'],
+            dbRecords: ['2026_01_01_000001_change_qty_on_orders_table'],
+            tables: ['orders'],
+            columns: [
+                'orders' => [
+                    ['name' => 'qty', 'type_name' => 'int4'],
+                ],
+            ],
+        );
+
+        $def = $this->makeDefinition(
+            filename: '2026_01_01_000001_change_qty_on_orders_table',
+            tableName: 'orders',
+            operationType: 'alter',
+            upChangedColumns: ['qty' => 'integer'],
+        );
+
+        $this->parser->method('parse')->willReturn($def);
+
+        $states = $this->analyzer->analyze('/path', $this->currentSchema);
+
+        $this->assertCount(1, $states);
+        $this->assertSame(
+            MigrationStatus::OK,
+            $states[0]->status,
+        );
+    }
+
+    public function test_recorded_change_mysql_boolean_tinyint_not_flagged_as_drift(): void
+    {
+        // boolean()->change() on MySQL (live type_name 'tinyint'): same
+        // logical type, must not be flagged BOGUS_RECORD.
+        $this->setupMocksForAnalyze(
+            fileNames: ['2026_01_01_000001_change_active_on_orders_table'],
+            dbRecords: ['2026_01_01_000001_change_active_on_orders_table'],
+            tables: ['orders'],
+            columns: [
+                'orders' => [
+                    ['name' => 'active', 'type_name' => 'tinyint'],
+                ],
+            ],
+        );
+
+        $def = $this->makeDefinition(
+            filename: '2026_01_01_000001_change_active_on_orders_table',
+            tableName: 'orders',
+            operationType: 'alter',
+            upChangedColumns: ['active' => 'boolean'],
+        );
+
+        $this->parser->method('parse')->willReturn($def);
+
+        $states = $this->analyzer->analyze('/path', $this->currentSchema);
+
+        $this->assertCount(1, $states);
+        $this->assertSame(
+            MigrationStatus::OK,
+            $states[0]->status,
+        );
+    }
+
+    public function test_change_only_nullability_modifier_is_new_migration(): void
+    {
+        // boolean('is_active')->nullable()->change() where the live column
+        // is already tinyint but still NOT NULL: the base type matches, so
+        // type_name can't prove the nullability change ran. It must stay
+        // NEW (migrate applies the modifier), never recorded-and-skipped.
+        $this->setupMocksForAnalyze(
+            fileNames: ['2026_01_01_000001_change_is_active_on_orders_table'],
+            dbRecords: [],
+            tables: ['orders'],
+            columns: [
+                'orders' => [
+                    ['name' => 'is_active', 'type_name' => 'tinyint'],
+                ],
+            ],
+        );
+
+        $def = $this->makeDefinition(
+            filename: '2026_01_01_000001_change_is_active_on_orders_table',
+            tableName: 'orders',
+            operationType: 'alter',
+            upChangedColumns: ['is_active' => 'boolean'],
+        );
+
+        $this->parser->method('parse')->willReturn($def);
+
+        $states = $this->analyzer->analyze('/path', $this->currentSchema);
+
+        $this->assertCount(1, $states);
+        $this->assertSame(
+            MigrationStatus::NEW_MIGRATION,
+            $states[0]->status,
+        );
+    }
+
+    public function test_change_only_unsigned_integer_is_new_migration(): void
+    {
+        // unsignedInteger()->change() where the live column is still a
+        // signed int: MySQL carries signedness outside type_name, so the
+        // base type matches and the change can't be confirmed applied. It
+        // must stay NEW, never recorded-and-skipped.
+        $this->setupMocksForAnalyze(
+            fileNames: ['2026_01_01_000001_change_ref_on_orders_table'],
+            dbRecords: [],
+            tables: ['orders'],
+            columns: [
+                'orders' => [
+                    ['name' => 'ref', 'type_name' => 'int'],
+                ],
+            ],
+        );
+
+        $def = $this->makeDefinition(
+            filename: '2026_01_01_000001_change_ref_on_orders_table',
+            tableName: 'orders',
+            operationType: 'alter',
+            upChangedColumns: ['ref' => 'unsignedInteger'],
+        );
+
+        $this->parser->method('parse')->willReturn($def);
+
+        $states = $this->analyzer->analyze('/path', $this->currentSchema);
+
+        $this->assertCount(1, $states);
+        $this->assertSame(
+            MigrationStatus::NEW_MIGRATION,
+            $states[0]->status,
+        );
+    }
+
+    public function test_changed_column_widen_integer_to_bigint_is_indeterminate(): void
+    {
+        // bigInteger()->change() with the column still a 32-bit int4 looks
+        // like a genuine widen — but SQLite stores both as INTEGER, so the
+        // schema can't be trusted to confirm or refute it. Indeterminate
+        // (migrate re-runs the widen) is the only safe answer.
+        $def = $this->makeDefinition(
+            tableName: 'orders',
+            operationType: 'alter',
+            upChangedColumns: ['ref_id' => 'bigInteger'],
+        );
+
+        $schema = $this->makeSchema(
+            tables: ['orders'],
+            columns: [
+                'orders' => [
+                    ['name' => 'ref_id', 'type_name' => 'int4'],
+                ],
+            ],
+        );
+
+        $this->assertNull(
+            $this->analyzer->isAppliedToSchema($def, $schema),
+        );
+    }
+
+    public function test_recorded_change_with_unknown_live_type_is_ok_not_bogus(): void
+    {
+        // The anti-deletion guarantee: a recorded ->change() migration whose
+        // live type can't be confidently classified (unknown driver token)
+        // must NOT be flagged BOGUS_RECORD — fix would delete a valid record.
+        $this->setupMocksForAnalyze(
+            fileNames: ['2026_01_01_000001_change_body_on_articles_table'],
+            dbRecords: ['2026_01_01_000001_change_body_on_articles_table'],
+            tables: ['articles'],
+            columns: [
+                'articles' => [
+                    ['name' => 'body', 'type_name' => 'citext'],
+                ],
+            ],
+        );
+
+        $def = $this->makeDefinition(
+            filename: '2026_01_01_000001_change_body_on_articles_table',
+            tableName: 'articles',
+            operationType: 'alter',
+            upChangedColumns: ['body' => 'text'],
+        );
+
+        $this->parser->method('parse')->willReturn($def);
+
+        $states = $this->analyzer->analyze('/path', $this->currentSchema);
+
+        $this->assertCount(1, $states);
+        $this->assertSame(
+            MigrationStatus::OK,
+            $states[0]->status,
+        );
+    }
+
+    public function test_recorded_change_is_never_flagged_bogus_from_type(): void
+    {
+        // A recorded ->change() is never torn down as BOGUS over a schema
+        // type comparison (the comparison isn't reliable across drivers).
+        // Genuine column drift is the schema-drift path's job; the record
+        // is trusted here and preserved.
+        $this->setupMocksForAnalyze(
+            fileNames: ['2026_01_01_000001_change_body_on_articles_table'],
+            dbRecords: ['2026_01_01_000001_change_body_on_articles_table'],
+            tables: ['articles'],
+            columns: [
+                'articles' => [
+                    ['name' => 'body', 'type_name' => 'varchar'],
+                ],
+            ],
+        );
+
+        $def = $this->makeDefinition(
+            filename: '2026_01_01_000001_change_body_on_articles_table',
+            tableName: 'articles',
+            operationType: 'alter',
+            upChangedColumns: ['body' => 'text'],
+        );
+
+        $this->parser->method('parse')->willReturn($def);
+
+        $states = $this->analyzer->analyze('/path', $this->currentSchema);
+
+        $this->assertCount(1, $states);
+        $this->assertSame(
+            MigrationStatus::OK,
+            $states[0]->status,
+        );
+    }
+
+    public function test_real_parsed_change_migration_is_indeterminate(): void
+    {
+        // End-to-end: the real parser produces per-table changed-column
+        // data, which the analyzer classifies as indeterminate (the
+        // ->change()s can't be confirmed from the schema). The genuine
+        // add (new_note) is present, so nothing forces not-applied.
+        $parser = new MigrationParser();
+        $def = $parser->parse(
+            dirname(__DIR__)
+            . '/fixtures/migrations-visitor/'
+            . '2026_01_01_000005_change_column_type.php',
+        );
+
+        $schema = $this->makeSchema(
+            tables: ['documents'],
+            columns: [
+                'documents' => [
+                    ['name' => 'source_document_id', 'type_name' => 'varchar'],
+                    ['name' => 'is_active', 'type_name' => 'tinyint'],
+                    ['name' => 'new_note', 'type_name' => 'varchar'],
+                ],
+            ],
+        );
+
+        $this->assertNull(
+            $this->analyzer->isAppliedToSchema($def, $schema),
+        );
+    }
+
+    public function test_real_parsed_change_migration_matching_types_is_indeterminate(): void
+    {
+        // End-to-end: when the live base types already match the targets,
+        // the result is indeterminate (not a confident "applied") — the
+        // changes can't be verified from type_name, so the migration is
+        // left for migrate rather than claimed as drift.
+        $parser = new MigrationParser();
+        $def = $parser->parse(
+            dirname(__DIR__)
+            . '/fixtures/migrations-visitor/'
+            . '2026_01_01_000005_change_column_type.php',
+        );
+
+        $schema = $this->makeSchema(
+            tables: ['documents'],
+            columns: [
+                'documents' => [
+                    ['name' => 'source_document_id', 'type_name' => 'text'],
+                    ['name' => 'is_active', 'type_name' => 'tinyint'],
+                    ['name' => 'new_note', 'type_name' => 'varchar'],
+                ],
+            ],
+        );
+
+        $this->assertNull(
+            $this->analyzer->isAppliedToSchema($def, $schema),
+        );
+    }
+
+    public function test_changed_column_length_narrowing_is_not_confirmed_applied(): void
+    {
+        // Narrowing string(255) → string(100): base type (varchar) is
+        // unchanged, so type_name can't prove the change ran. It must NOT
+        // be reported applied (which would record-and-skip it) — it stays
+        // indeterminate, leaving it for `migrate`.
+        $this->setupMocksForAnalyze(
+            fileNames: ['2026_01_01_000001_narrow_code_on_items_table'],
+            dbRecords: [],
+            tables: ['items'],
+            columns: [
+                'items' => [
+                    ['name' => 'code', 'type_name' => 'varchar'],
+                ],
+            ],
+        );
+
+        $def = $this->makeDefinition(
+            filename: '2026_01_01_000001_narrow_code_on_items_table',
+            tableName: 'items',
+            operationType: 'alter',
+            upChangedColumns: ['code' => 'string'],
+        );
+
+        $this->parser->method('parse')->willReturn($def);
+
+        $states = $this->analyzer->analyze('/path', $this->currentSchema);
+
+        $this->assertCount(1, $states);
+        $this->assertSame(
+            MigrationStatus::NEW_MIGRATION,
+            $states[0]->status,
+        );
+    }
+
+    public function test_changed_column_timezone_change_is_not_confirmed_applied(): void
+    {
+        // timestampTz() → change against a plain timestamp column. The
+        // timezone qualifier isn't exposed by the canonical base type, so
+        // the change can't be confirmed applied and stays indeterminate.
+        $this->setupMocksForAnalyze(
+            fileNames: ['2026_01_01_000001_change_seen_at_on_visits_table'],
+            dbRecords: [],
+            tables: ['visits'],
+            columns: [
+                'visits' => [
+                    ['name' => 'seen_at', 'type_name' => 'timestamp'],
+                ],
+            ],
+        );
+
+        $def = $this->makeDefinition(
+            filename: '2026_01_01_000001_change_seen_at_on_visits_table',
+            tableName: 'visits',
+            operationType: 'alter',
+            upChangedColumns: ['seen_at' => 'timestampTz'],
+        );
+
+        $this->parser->method('parse')->willReturn($def);
+
+        $states = $this->analyzer->analyze('/path', $this->currentSchema);
+
+        $this->assertCount(1, $states);
+        $this->assertSame(
+            MigrationStatus::NEW_MIGRATION,
+            $states[0]->status,
         );
     }
 }

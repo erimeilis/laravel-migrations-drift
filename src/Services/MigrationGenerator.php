@@ -448,6 +448,13 @@ class MigrationGenerator
     ): string {
         $filepath = $migrationsPath . '/' . $filename . '.php';
 
+        // Only import the DB facade when the body uses it (e.g. raw
+        // column defaults), to keep generated files free of dead imports.
+        // The trailing indentation aligns the following `use` line.
+        $dbImport = str_contains($up . $down, 'DB::')
+            ? "use Illuminate\\Support\\Facades\\DB;\n            "
+            : '';
+
         $content = <<<PHP
             <?php
 
@@ -455,7 +462,7 @@ class MigrationGenerator
 
             use Illuminate\\Database\\Migrations\\Migration;
             use Illuminate\\Database\\Schema\\Blueprint;
-            use Illuminate\\Support\\Facades\\Schema;
+            {$dbImport}use Illuminate\\Support\\Facades\\Schema;
 
             return new class extends Migration
             {

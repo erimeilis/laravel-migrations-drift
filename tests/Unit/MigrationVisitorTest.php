@@ -263,4 +263,133 @@ class MigrationVisitorTest extends TestCase
         $this->assertArrayHasKey('products', $def->upColumnsByTable);
         $this->assertContains('is_featured', $def->upColumnsByTable['products']);
     }
+
+    public function test_change_modifier_captured_separately_from_added_columns(): void
+    {
+        $def = $this->parser->parse(
+            $this->fixturesPath
+            . '/migrations-visitor/'
+            . '2026_01_01_000005_change_column_type.php',
+        );
+
+        // ->change() columns are tracked with their target Blueprint type.
+        $this->assertArrayHasKey(
+            'source_document_id',
+            $def->upChangedColumns,
+        );
+        $this->assertSame(
+            'text',
+            $def->upChangedColumns['source_document_id'],
+        );
+        $this->assertArrayHasKey('is_active', $def->upChangedColumns);
+        $this->assertSame(
+            'boolean',
+            $def->upChangedColumns['is_active'],
+        );
+
+        // ->change() columns are NOT counted as added columns — this is
+        // the bug: a change looked identical to an add.
+        $this->assertNotContains(
+            'source_document_id',
+            $def->upColumns,
+        );
+        $this->assertNotContains('is_active', $def->upColumns);
+
+        // A genuine new column is still tracked as an add, not a change.
+        $this->assertContains('new_note', $def->upColumns);
+        $this->assertArrayNotHasKey(
+            'new_note',
+            $def->upChangedColumns,
+        );
+    }
+
+    public function test_change_modifier_grouped_by_table(): void
+    {
+        $def = $this->parser->parse(
+            $this->fixturesPath
+            . '/migrations-visitor/'
+            . '2026_01_01_000005_change_column_type.php',
+        );
+
+        $this->assertArrayHasKey(
+            'documents',
+            $def->upChangedColumnsByTable,
+        );
+        $this->assertSame(
+            'text',
+            $def->upChangedColumnsByTable['documents']['source_document_id'],
+        );
+        $this->assertSame(
+            'boolean',
+            $def->upChangedColumnsByTable['documents']['is_active'],
+        );
+    }
+
+    public function test_change_and_add_capture_type_arguments(): void
+    {
+        $def = $this->parser->parse(
+            $this->fixturesPath
+            . '/migrations-visitor/'
+            . '2026_01_01_000006_parameterized_change.php',
+        );
+
+        // ->change() length / precision arguments are captured.
+        $this->assertSame([32], $def->upColumnArgs['sku']);
+        $this->assertSame([12, 4], $def->upColumnArgs['price']);
+
+        // Added columns capture their arguments too.
+        $this->assertSame([120], $def->upColumnArgs['label']);
+
+        $this->assertSame('string', $def->upChangedColumns['sku']);
+        $this->assertSame('decimal', $def->upChangedColumns['price']);
+        $this->assertContains('label', $def->upColumns);
+    }
+
+    public function test_column_modifiers_are_captured(): void
+    {
+        $def = $this->parser->parse(
+            $this->fixturesPath
+            . '/migrations-visitor/'
+            . '2026_01_01_000007_column_modifiers.php',
+        );
+
+        $this->assertTrue(
+            $def->upColumnModifiers['nickname']['nullable'],
+        );
+        $this->assertSame(
+            100,
+            $def->upColumnModifiers['credits']['default'],
+        );
+        $this->assertTrue(
+            $def->upColumnModifiers['owner_id']['unsigned'],
+        );
+
+        // Modifiers on a ->change() chain are captured too.
+        $this->assertSame(
+            'boolean',
+            $def->upChangedColumns['active'],
+        );
+        $this->assertTrue(
+            $def->upColumnModifiers['active']['default'],
+        );
+    }
+
+    public function test_temporal_precision_and_raw_default_captured(): void
+    {
+        $def = $this->parser->parse(
+            $this->fixturesPath
+            . '/migrations-visitor/'
+            . '2026_01_01_000008_temporal_and_raw_default.php',
+        );
+
+        $this->assertSame([6], $def->upColumnArgs['occurred_at']);
+        $this->assertTrue(
+            $def->upColumnModifiers['occurred_at']['nullable'],
+        );
+
+        $this->assertSame(
+            'CURRENT_TIMESTAMP',
+            $def->upColumnModifiers['created_at']['default_raw'],
+        );
+    }
 }

@@ -145,7 +145,8 @@ class MigrationStateAnalyzer
         // Use per-table evidence if available
         $hasPerTableEvidence = !empty($def->upColumnsByTable)
             || !empty($def->upIndexesByTable)
-            || !empty($def->upForeignKeysByTable);
+            || !empty($def->upForeignKeysByTable)
+            || !empty($def->upChangedColumnsByTable);
 
         if ($hasPerTableEvidence) {
             return $this->isAlterAppliedMultiTable($def, $actualSchema);
@@ -153,7 +154,8 @@ class MigrationStateAnalyzer
 
         $hasCheckableEvidence = !empty($def->upColumns)
             || !empty($def->upIndexes)
-            || !empty($def->upForeignKeys);
+            || !empty($def->upForeignKeys)
+            || !empty($def->upChangedColumns);
 
         if (!$hasCheckableEvidence) {
             return null;
@@ -203,6 +205,15 @@ class MigrationStateAnalyzer
             }
         }
 
+        // A ->change() can't be confirmed from the schema (see
+        // changedColumnsResult) — if the migration only changes columns,
+        // the result is indeterminate rather than applied.
+        $changedResult = $this->changedColumnsResult($def->upChangedColumns);
+
+        if ($changedResult !== true) {
+            return $changedResult;
+        }
+
         return true;
     }
 
@@ -217,6 +228,7 @@ class MigrationStateAnalyzer
         array $actualSchema,
     ): ?bool {
         $hasAnyEvidence = false;
+        $indeterminate = false;
 
         foreach ($def->upColumnsByTable as $table => $columns) {
             if (empty($columns)) {
@@ -281,6 +293,25 @@ class MigrationStateAnalyzer
                     return false;
                 }
             }
+        }
+
+        foreach ($def->upChangedColumnsByTable as $table => $changed) {
+            if (empty($changed)) {
+                continue;
+            }
+            $hasAnyEvidence = true;
+
+            if (!in_array($table, $actualSchema['tables'], true)) {
+                return false;
+            }
+
+            // The table exists but a ->change() to it can't be confirmed
+            // from the schema — stay indeterminate.
+            $indeterminate = true;
+        }
+
+        if ($indeterminate) {
+            return null;
         }
 
         return $hasAnyEvidence ? true : null;
@@ -513,6 +544,29 @@ class MigrationStateAnalyzer
             fn (array $col): string => (string) ($col['name'] ?? ''),
             $columns,
         );
+    }
+
+    /**
+     * Evaluate a set of ->change()d columns against the live schema.
+     *
+     * A ->change() can alter a column's type, length, precision,
+     * nullability, default, signedness or timezone. Most of these are not
+     * exposed by schema introspection, and the Blueprint→native type
+     * mapping is driver-dependent (SQLite collapses every integer width to
+     * INTEGER and every text size to TEXT; PostgreSQL stores mediumText as
+     * text; MySQL carries signedness and boolean-ness outside type_name).
+     * So the schema can neither confirm nor refute that a change ran. We
+     * therefore treat any changed column as indeterminate: migrate re-runs
+     * it (a no-op if already applied) rather than recording-and-skipping a
+     * change that may not have run, and a valid record is never deleted
+     * over a comparison we can't trust.
+     *
+     * @param array<string, string> $changed column name → target Blueprint method
+     * @return bool|null true = nothing to check, null = indeterminate
+     */
+    private function changedColumnsResult(array $changed): ?bool
+    {
+        return empty($changed) ? true : null;
     }
 
     /**

@@ -261,6 +261,51 @@ class TypeMapper
         ];
     }
 
+    /**
+     * Like fromBlueprintMethod(), but applies captured numeric type
+     * arguments (length / precision / scale) so a parameterized column
+     * keeps its real size — e.g. string + [32] → varchar(32),
+     * decimal + [12, 4] → decimal(12,4). Methods without a size, or with
+     * no args, fall back to the default type.
+     *
+     * @param array<int, int> $args
+     * @return array{type: string, type_name: string}
+     */
+    public function typeWithArgs(
+        ?string $blueprintMethod,
+        array $args,
+    ): array {
+        $base = $this->fromBlueprintMethod($blueprintMethod);
+
+        if ($args === []) {
+            return $base;
+        }
+
+        $typeName = $base['type_name'];
+
+        $type = match ($typeName) {
+            'varchar' => "varchar({$args[0]})",
+            'char' => "char({$args[0]})",
+            'decimal' => 'decimal(' . $args[0] . ','
+                . ($args[1] ?? 2) . ')',
+            'float' => isset($args[1])
+                ? "float({$args[0]},{$args[1]})"
+                : "float({$args[0]})",
+            'double' => isset($args[1])
+                ? "double({$args[0]},{$args[1]})"
+                : "double({$args[0]})",
+            'timestamp', 'timestamptz', 'datetime',
+            'datetimetz', 'time', 'timetz'
+                => "{$typeName}({$args[0]})",
+            default => $base['type'],
+        };
+
+        return [
+            'type' => $type,
+            'type_name' => $typeName,
+        ];
+    }
+
     private function mapType(
         string $name,
         string $type,
@@ -318,6 +363,36 @@ class TypeMapper
                 ? 'float' : 'double';
 
             return "{$method}('{$name}', {$m[2]}, {$m[3]})";
+        }
+
+        // Float/double with a single precision argument
+        if (
+            preg_match(
+                '/^(float|double)\((\d+)\)$/',
+                $type,
+                $m,
+            )
+        ) {
+            return "{$m[1]}('{$name}', {$m[2]})";
+        }
+
+        // Temporal types with fractional-second precision
+        if (
+            preg_match(
+                '/^(timestamptz|timestamp|datetimetz|datetime|timetz|time)\((\d+)\)$/',
+                $type,
+                $m,
+            )
+        ) {
+            $method = match ($m[1]) {
+                'timestamptz' => 'timestampTz',
+                'datetime' => 'dateTime',
+                'datetimetz' => 'dateTimeTz',
+                'timetz' => 'timeTz',
+                default => $m[1],
+            };
+
+            return "{$method}('{$name}', {$m[2]})";
         }
 
         // Enum
@@ -436,6 +511,8 @@ class TypeMapper
         $modifiers = '';
         $nullable = $columnInfo['nullable'] ?? false;
         $default = $columnInfo['default'] ?? null;
+        $defaultRaw = $columnInfo['default_raw'] ?? null;
+        $unsigned = $columnInfo['unsigned'] ?? false;
         $autoIncrement = $columnInfo['auto_increment']
             ?? false;
 
@@ -444,11 +521,18 @@ class TypeMapper
             return $modifiers;
         }
 
+        if ($unsigned) {
+            $modifiers .= '->unsigned()';
+        }
+
         if ($nullable) {
             $modifiers .= '->nullable()';
         }
 
-        if ($default !== null) {
+        if ($defaultRaw !== null) {
+            $escaped = addcslashes((string) $defaultRaw, "'\\");
+            $modifiers .= "->default(DB::raw('{$escaped}'))";
+        } elseif ($default !== null) {
             $defaultStr = $this->formatDefault($default);
             $modifiers .= "->default({$defaultStr})";
         }

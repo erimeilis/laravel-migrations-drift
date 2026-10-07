@@ -4,6 +4,34 @@ All notable changes to `laravel-migrations-drift` are documented here.
 This project adheres to [Semantic Versioning](https://semver.org).
 Releases prior to `0.4.1` are recorded as Git tags only.
 
+## [0.4.3] - 2026-10-07
+
+### Fixed
+
+- **`->change()` migrations are no longer silently skipped by `migrations:fix`.**
+  A migration that only alters an existing column
+  (`$table->text('source_id')->change()`) was parsed as a plain column *add*, so
+  the analyzer saw the column present by name and classified the file as a **lost
+  record** — inserting a `migrations` row so `php artisan migrate` skipped it, and
+  the alteration never ran. `->change()` is now detected and tracked separately
+  from added columns, and a column change is treated as *indeterminate* for
+  schema-application purposes: introspection cannot confirm a change ran (the
+  native type is driver-collapsed, and nullability / default / length / precision
+  / signedness / timezone are not exposed by `type_name`). Such a migration is
+  therefore left as a **new migration** for `migrate` to run, and a valid
+  migration record is never deleted over a comparison that can't be trusted.
+
+### Improved
+
+- **Faithful column reproduction in consolidation.** `migrations:fix --consolidate`
+  now preserves, for both added and changed columns: type length/precision
+  (`string('x', 32)`, `decimal('x', 12, 4)`, single-argument `float`), temporal
+  fractional-second precision (`timestamp('x', 6)`), and the `nullable`,
+  `default` (including `DB::raw(...)` expressions), and `unsigned` modifiers. A
+  `->change()`'s final definition is applied when replaying a create-then-change
+  chain, and generated migrations import the `DB` facade only when a raw default
+  needs it.
+
 ## [0.4.2] - 2026-06-25
 
 ### Removed
